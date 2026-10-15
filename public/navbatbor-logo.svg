@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;800;900&amp;display=swap');
+      .title { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; font-weight: 900; font-size: 64px; fill: #ffffff; letter-spacing: -1.5px; }
+      .tagline { font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; font-weight: 500; font-size: 20px; fill: rgba(255, 255, 255, 0.88); letter-spacing: 0.3px; }
+    </style>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0066FF"/>
+      <stop offset="45%" stop-color="#0052E0"/>
+      <stop offset="100%" stop-color="#0035A8"/>
+    </linearGradient>
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#00F0FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Official Royal Blue Gradient Background -->
+  <rect width="512" height="512" fill="url(#bgGrad)" rx="56" />
+
+  <!-- Center Emblem (Scale 1.1x) -->
+  <g transform="translate(256, 190) scale(1.15) translate(-100, -100)">
+    <!-- Queue Orbit -->
+    <circle cx="100" cy="100" r="78" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.22" stroke-dasharray="6 6"/>
+    
+    <!-- Active Queue Clock Arc -->
+    <path d="M 100 22 A 78 78 0 1 1 22 100" fill="none" stroke="url(#cyanGlow)" stroke-width="6.5" stroke-linecap="round"/>
+    
+    <!-- Queue Head Glowing Pulse -->
+    <circle cx="100" cy="22" r="5.5" fill="#00F0FF"/>
+    <circle cx="100" cy="22" r="2.5" fill="#ffffff"/>
+
+    <!-- Left Pillar (Client in line) -->
+    <rect x="54" y="52" width="22" height="96" rx="11" fill="#ffffff"/>
+
+    <!-- Diagonal Ribbon (Fast-Forward Flow) -->
+    <path d="M 54 63 L 76 52 L 146 137 L 124 148 Z" fill="#ffffff" opacity="0.96"/>
+
+    <!-- Right Pillar (Service Counter / Turn Called) -->
+    <rect x="124" y="52" width="22" height="96" rx="11" fill="#ffffff"/>
+
+    <!-- Speed Chevron -->
+    <path d="M 90 88 L 108 100 L 90 112" fill="none" stroke="#0052E0" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="256" y="385" text-anchor="middle" class="title">NavbatBor</text>
+
+  <!-- Tagline -->
+  <text x="256" y="425" text-anchor="middle" class="tagline">Navbat kutmang. Vaqtingizni qadrlang.</text>
+</svg>

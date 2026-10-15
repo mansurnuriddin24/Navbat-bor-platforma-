@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <linearGradient id="favGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0066FF"/>
+      <stop offset="50%" stop-color="#0052E0"/>
+      <stop offset="100%" stop-color="#003DB8"/>
+    </linearGradient>
+    <linearGradient id="favCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#00F0FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Background -->
+  <rect width="100" height="100" rx="24" fill="url(#favGrad)"/>
+
+  <g transform="translate(50, 50) scale(0.44) translate(-100, -100)">
+    <!-- Queue Orbit -->
+    <circle cx="100" cy="100" r="78" fill="none" stroke="#ffffff" stroke-width="5" opacity="0.25" stroke-dasharray="8 8"/>
+    <path d="M 100 22 A 78 78 0 1 1 22 100" fill="none" stroke="url(#favCyan)" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="100" cy="22" r="7" fill="#00F0FF"/>
+    <circle cx="100" cy="22" r="3.5" fill="#ffffff"/>
+
+    <!-- Left Pillar -->
+    <rect x="54" y="52" width="22" height="96" rx="11" fill="#ffffff"/>
+
+    <!-- Diagonal Ribbon -->
+    <path d="M 54 63 L 76 52 L 146 137 L 124 148 Z" fill="#ffffff"/>
+
+    <!-- Right Pillar -->
+    <rect x="124" y="52" width="22" height="96" rx="11" fill="#ffffff"/>
+
+    <!-- Forward Chevron -->
+    <path d="M 90 88 L 108 100 L 90 112" fill="none" stroke="#0066FF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

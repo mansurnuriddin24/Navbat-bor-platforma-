@@ -26,6 +26,7 @@ import { CustomerBenefitsPage } from './components/CustomerBenefitsPage';
 import { BusinessBenefitsPage } from './components/BusinessBenefitsPage';
 import { LiveQueueDisplay } from './components/LiveQueueDisplay';
 import { useTranslation } from './i18n/LanguageContext';
+import { Analytics } from '@vercel/analytics/react';
 
 export default function App() {
   const { t, translateCategory, translateCity } = useTranslation();
@@ -941,6 +942,9 @@ export default function App() {
         }}
         onOpenScanQR={() => setScanQRModalOpen(true)}
       />
+
+      {/* Vercel Web Analytics */}
+      <Analytics />
     </div>
   );
 }

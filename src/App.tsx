@@ -103,32 +103,58 @@ export default function App() {
 
   // Initial Load: User, Categories, Cities
   useEffect(() => {
-    // Check if redirected from Google OAuth or external auth callback
+    // Check if redirected from Telegram bot auth session or token
     const searchParams = new URLSearchParams(window.location.search);
-    const googleToken = searchParams.get('google_token');
+    const authSessionId = searchParams.get('auth_session');
+    const directToken = searchParams.get('token') || searchParams.get('tg_token');
     const authError = searchParams.get('auth_error');
 
-    if (googleToken) {
-      setStoredToken(googleToken);
+    const cleanCurrentUrl = () => {
       const cleanUrl = window.location.pathname + (window.location.hash || '');
       window.history.replaceState({}, document.title, cleanUrl);
+    };
+
+    if (directToken) {
+      setStoredToken(directToken);
+      cleanCurrentUrl();
+      api.getMe().then((res) => {
+        if (res?.user) setCurrentUser(res.user);
+      }).catch(() => {});
+    } else if (authSessionId) {
+      // Automatic login upon returning from Telegram bot via "Saytga o‘tish" link
+      api
+        .checkTelegramAuthSession(authSessionId)
+        .then(async (res) => {
+          if (res.status === 'CONFIRMED' && res.token && res.user) {
+            setStoredToken(res.token);
+            setCurrentUser(res.user);
+            try {
+              await api.consumeTelegramAuthSession(authSessionId);
+            } catch (e) {}
+          }
+        })
+        .catch((e) => {
+          console.warn('Telegram auth return error:', e);
+        })
+        .finally(() => {
+          cleanCurrentUrl();
+        });
     } else if (authError) {
       alert(`Kirishda xatolik: ${authError}`);
-      const cleanUrl = window.location.pathname + (window.location.hash || '');
-      window.history.replaceState({}, document.title, cleanUrl);
+      cleanCurrentUrl();
+    } else {
+      // Check existing session in localStorage
+      api
+        .getMe()
+        .then((res) => {
+          if (res?.user) {
+            setCurrentUser(res.user);
+          }
+        })
+        .catch(() => {
+          // Guest user is fine
+        });
     }
-
-    // Check current auth
-    api
-      .getMe()
-      .then((res) => {
-        if (res?.user) {
-          setCurrentUser(res.user);
-        }
-      })
-      .catch(() => {
-        // Guest user is fine
-      });
 
     // Load categories & cities
     Promise.all([api.getCategories(), api.getCities()])

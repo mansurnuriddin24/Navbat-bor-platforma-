@@ -928,10 +928,10 @@ function getBotUsername(): string {
 
 function getPlatformAppUrl(): string {
   const custom = getSetting('app_url') || process.env.APP_URL;
-  if (custom && custom.trim().length > 0 && !custom.includes('localhost') && !custom.includes('your-domain.com')) {
+  if (custom && custom.trim().length > 0 && !custom.includes('localhost') && !custom.includes('your-domain.com') && !custom.includes('asia-southeast1.run.app')) {
     return custom.trim().replace(/\/+$/, '');
   }
-  return 'https://www.navbatbor.uz';
+  return 'https://navbatbor.uz';
 }
 
 // Backfill GPS coordinates for businesses in Qarshi
@@ -2219,201 +2219,6 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
     db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
   }
   res.json({ success: true });
-});
-
-// --- GOOGLE OAUTH 2.0 INTEGRATION ---
-// 1. Return Google OAuth config (Client ID is public, secret is NEVER sent)
-app.get('/api/auth/google/config', (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || '';
-  res.json({
-    clientId,
-    enabled: Boolean(clientId && clientId.trim().length > 0),
-    redirectUri: `${getPlatformAppUrl()}/api/auth/google/callback`
-  });
-});
-
-// 2. Redirect to Google OAuth Consent Page (Standard OAuth 2.0 Code Flow)
-app.get('/api/auth/google/login', (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const baseUrl = getPlatformAppUrl();
-  if (!clientId) {
-    return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google OAuth serverda sozlanmagan (GOOGLE_CLIENT_ID belgilanmagan)')}`);
-  }
-  const redirectUri = `${baseUrl}/api/auth/google/callback`;
-  const state = crypto.randomBytes(16).toString('hex');
-  const googleAuthUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'openid email profile',
-    access_type: 'online',
-    state,
-    prompt: 'select_account'
-  }).toString();
-
-  res.redirect(googleAuthUrl);
-});
-
-// 3. Google OAuth Callback (Exchanges code for tokens, signs user in, and redirects to app)
-app.get('/api/auth/google/callback', async (req, res) => {
-  const { code, error } = req.query;
-  const baseUrl = getPlatformAppUrl();
-
-  if (error || !code) {
-    const errorMsg = error ? String(error) : 'Google orqali kirish rad etildi';
-    return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent(errorMsg)}`);
-  }
-
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google OAuth serverda to‘liq sozlanmagan (GOOGLE_CLIENT_SECRET yetishmaydi)')}`);
-  }
-
-  try {
-    const redirectUri = `${baseUrl}/api/auth/google/callback`;
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code: String(code),
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
-      })
-    });
-
-    if (!tokenResponse.ok) {
-      console.error('[Google OAuth] Token exchange error:', tokenResponse.status);
-      return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google orqali autentifikatsiyadan o‘tishda xatolik yuz berdi')}`);
-    }
-
-    const tokenData = await tokenResponse.json() as any;
-    const accessToken = tokenData.access_token;
-
-    const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-
-    if (!userInfoResponse.ok) {
-      return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google profil ma’lumotlarini olib bo‘lmadi')}`);
-    }
-
-    const profile = await userInfoResponse.json() as any;
-    const { email, name } = profile;
-
-    if (!email) {
-      return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google hisobida email topilmadi')}`);
-    }
-
-    // Lookup existing user or register new CUSTOMER
-    let user = db.prepare('SELECT id, name, email, phone, role, status FROM users WHERE email = ? COLLATE NOCASE').get(email) as any;
-
-    if (!user) {
-      const newUserId = 'usr-g-' + crypto.randomUUID().slice(0, 8);
-      const randomPassword = crypto.randomBytes(24).toString('hex');
-      const hash = hashPassword(randomPassword);
-      const displayName = name || email.split('@')[0];
-
-      db.prepare(`
-        INSERT INTO users (id, name, email, phone, password_hash, role, status)
-        VALUES (?, ?, ?, NULL, ?, 'CUSTOMER', 'ACTIVE')
-      `).run(newUserId, displayName, email, hash);
-
-      user = {
-        id: newUserId,
-        name: displayName,
-        email,
-        phone: null,
-        role: 'CUSTOMER',
-        status: 'ACTIVE'
-      };
-
-      logAudit(newUserId, email, 'USER_REGISTERED_GOOGLE', 'USER', newUserId, 'Google OAuth orqali ro‘yxatdan o‘tdi');
-    }
-
-    if (user.status === 'SUSPENDED' || user.status === 'BLOCKED') {
-      return res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Ushbu hisob platforma ma’muriyati tomonidan bloklangan')}`);
-    }
-
-    const token = 'tok-' + crypto.randomBytes(24).toString('hex');
-    db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
-
-    logAudit(user.id, user.email, 'USER_LOGIN_GOOGLE', 'USER', user.id, 'Google OAuth orqali tizimga kirdi');
-
-    res.redirect(`${baseUrl}/?google_token=${token}`);
-  } catch (err: any) {
-    console.error('[Google OAuth] Callback exception:', err?.message || err);
-    res.redirect(`${baseUrl}/?auth_error=${encodeURIComponent('Google autentifikatsiyasida kutilmagan xatolik yuz berdi')}`);
-  }
-});
-
-// 4. Google One Tap / In-page Credential Verification (API)
-app.post('/api/auth/google', async (req, res) => {
-  const { credential } = req.body;
-  if (!credential) {
-    return res.status(400).json({ error: 'Google credential talab qilinadi' });
-  }
-
-  try {
-    const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
-    if (!verifyRes.ok) {
-      return res.status(401).json({ error: 'Google tokeni tasdiqlanmadi yoki muddati o‘tgan' });
-    }
-
-    const payload = await verifyRes.json() as any;
-    const { email, name, email_verified } = payload;
-
-    if (!email || (email_verified !== 'true' && email_verified !== true)) {
-      return res.status(400).json({ error: 'Tasdiqlangan Google email topilmadi' });
-    }
-
-    const configuredClientId = process.env.GOOGLE_CLIENT_ID;
-    if (configuredClientId && payload.aud !== configuredClientId) {
-      return res.status(403).json({ error: 'Google Client ID mos kelmadi' });
-    }
-
-    let user = db.prepare('SELECT id, name, email, phone, role, status FROM users WHERE email = ? COLLATE NOCASE').get(email) as any;
-
-    if (!user) {
-      const newUserId = 'usr-g-' + crypto.randomUUID().slice(0, 8);
-      const randomPassword = crypto.randomBytes(24).toString('hex');
-      const hash = hashPassword(randomPassword);
-      const displayName = name || email.split('@')[0];
-
-      db.prepare(`
-        INSERT INTO users (id, name, email, phone, password_hash, role, status)
-        VALUES (?, ?, ?, NULL, ?, 'CUSTOMER', 'ACTIVE')
-      `).run(newUserId, displayName, email, hash);
-
-      user = {
-        id: newUserId,
-        name: displayName,
-        email,
-        phone: null,
-        role: 'CUSTOMER',
-        status: 'ACTIVE'
-      };
-
-      logAudit(newUserId, email, 'USER_REGISTERED_GOOGLE', 'USER', newUserId, 'Google One Tap orqali ro‘yxatdan o‘tdi');
-    }
-
-    if (user.status === 'SUSPENDED' || user.status === 'BLOCKED') {
-      return res.status(403).json({ error: 'Ushbu hisob platforma ma’muriyati tomonidan bloklangan' });
-    }
-
-    const token = 'tok-' + crypto.randomBytes(24).toString('hex');
-    db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
-
-    logAudit(user.id, user.email, 'USER_LOGIN_GOOGLE', 'USER', user.id, 'Google One Tap orqali kirdi');
-
-    res.json({ token, user });
-  } catch (err: any) {
-    console.error('[Google Auth API] Exception:', err?.message || err);
-    res.status(500).json({ error: 'Google autentifikatsiyasida xatolik yuz berdi' });
-  }
 });
 
 // ==========================================
@@ -7607,10 +7412,21 @@ app.get('/api/auth/telegram-session/:sessionId', (req, res) => {
   }
 
   if (session.status === 'CONFIRMED' && session.token && session.user_id) {
-    const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id);
+    const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id) as any;
     if (!user) {
       return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
     }
+
+    if (user.status === 'SUSPENDED' || user.status === 'BLOCKED') {
+      return res.status(403).json({ error: 'Ushbu hisob platforma ma’muriyati tomonidan bloklangan' });
+    }
+
+    // Requirement 6: Verify that a valid session was actually created in user_sessions
+    const activeSession = db.prepare('SELECT user_id FROM user_sessions WHERE token = ?').get(session.token) as any;
+    if (!activeSession) {
+      return res.status(401).json({ error: 'Foydalanuvchi sessiyasi yaratilmagan yoki yaroqsiz' });
+    }
+
     return res.json({
       status: 'CONFIRMED',
       token: session.token,
@@ -7652,6 +7468,12 @@ app.post('/api/auth/telegram-quick-login', (req, res) => {
     return res.status(403).json({
       error: 'Telegram bot orqali tasdiqlash hali yakunlanmagan. Iltimos, @' + getBotUsername() + ' botida START tugmasini bosing.'
     });
+  }
+
+  // Requirement 6: Verify that a valid session exists in user_sessions
+  const activeSession = db.prepare('SELECT user_id FROM user_sessions WHERE token = ?').get(session.token) as any;
+  if (!activeSession) {
+    return res.status(401).json({ error: 'Foydalanuvchi sessiyasi yaratilmagan yoki yaroqsiz' });
   }
 
   const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id);
@@ -9947,13 +9769,14 @@ async function processTelegramUpdate(update: any): Promise<void> {
       db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
         .run(user.id, token, sessionId);
 
+      const returnUrl = `${appUrl}/?auth_session=${sessionId}`;
       await sendTelegramAlert({
         chatId,
         message: `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${from.first_name || user.name}</b>!\n\nSiz NavbatBor platformasiga Telegram (@${getBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
         replyMarkup: {
           inline_keyboard: [
-            [{ text: '🌐 Saytga o‘tish', url: appUrl }],
-            [{ text: '📱 NavbatBor ilovasini ochish', web_app: { url: appUrl } }]
+            [{ text: '🌐 Saytga o‘tish', url: returnUrl }],
+            [{ text: '📱 NavbatBor ilovasini ochish', web_app: { url: returnUrl } }]
           ]
         }
       });
@@ -9991,12 +9814,14 @@ async function processTelegramUpdate(update: any): Promise<void> {
         db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
           .run(user.id, token, session.id);
 
+        const returnUrl = `${appUrl}/?auth_session=${session.id}`;
         await sendTelegramAlert({
           chatId,
           message: `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${from.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib xizmatlardan foydalanishingiz mumkin.`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '🌐 Saytga o‘tish', url: appUrl }]
+              [{ text: '🌐 Saytga o‘tish', url: returnUrl }],
+              [{ text: '📱 NavbatBor ilovasini ochish', web_app: { url: returnUrl } }]
             ]
           }
         });

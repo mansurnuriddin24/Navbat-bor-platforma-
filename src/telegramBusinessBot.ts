@@ -56,10 +56,10 @@ export function getBusinessPlatformAppUrl(db?: DatabaseSync): string {
       if (row?.value) custom = row.value;
     } catch (e) {}
   }
-  if (custom && custom.trim().length > 0 && !custom.includes('localhost')) {
+  if (custom && custom.trim().length > 0 && !custom.includes('localhost') && !custom.includes('your-domain.com') && !custom.includes('asia-southeast1.run.app')) {
     return custom.trim().replace(/\/+$/, '');
   }
-  return 'https://ais-dev-ntqw6q5d5cy44rj34kkb3h-433562582375.asia-southeast1.run.app';
+  return 'https://navbatbor.uz';
 }
 
 export function fallbackAuthenticateTelegramUser(db: DatabaseSync, tgId: string, from?: any): { token: string; user: any } {
@@ -1499,13 +1499,15 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       .run(user.id, token, sessionId);
 
     const appUrl = getBusinessPlatformAppUrl(db);
+    const returnUrl = `${appUrl}/?auth_session=${sessionId}`;
     await sendBusinessBotMessage(
       chatId,
       `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSiz NavbatBor Biznes platformasiga Telegram (@${getBusinessBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
       {
         replyMarkup: {
           inline_keyboard: [
-            [{ text: '🌐 Saytga o‘tish', url: appUrl }]
+            [{ text: '🌐 Saytga o‘tish', url: returnUrl }],
+            [{ text: '📱 NavbatBor ilovasini ochish', web_app: { url: returnUrl } }]
           ]
         }
       }
@@ -1566,13 +1568,15 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         .run(user.id, token, session.id);
 
       const appUrl = getBusinessPlatformAppUrl(db);
+      const returnUrl = `${appUrl}/?auth_session=${session.id}`;
       await sendBusinessBotMessage(
         chatId,
         `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib biznesingizni boshqarishingiz mumkin.`,
         {
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '🌐 Saytga o‘tish', url: appUrl }]
+              [{ text: '🌐 Saytga o‘tish', url: returnUrl }],
+              [{ text: '📱 NavbatBor ilovasini ochish', web_app: { url: returnUrl } }]
             ]
           }
         }

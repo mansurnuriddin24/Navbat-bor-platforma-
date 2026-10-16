@@ -1,6 +1,6 @@
 import React from 'react';
 import { 
-  Home, Search, Clock, Calendar, Briefcase, Shield, User as UserIcon, LogIn, QrCode
+  Home, Search, Clock, Calendar, Briefcase, Shield, User as UserIcon, QrCode
 } from 'lucide-react';
 import { User } from '../types';
 import { useTranslation } from '../i18n/LanguageContext';
@@ -11,8 +11,10 @@ interface MobileBottomNavProps {
   currentUser?: User | null;
   user?: User | null;
   activeQueueCount?: number;
-  onOpenAuth: () => void;
+  onOpenAuth: (mode?: 'login' | 'register') => void;
   onOpenScanQR: () => void;
+  onNavigateToCustomerTab?: (tab: 'bookings' | 'queue' | 'favorites' | 'history' | 'profile') => void;
+  customerActiveTab?: 'bookings' | 'queue' | 'favorites' | 'history' | 'profile';
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -23,13 +25,96 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   activeQueueCount = 0,
   onOpenAuth,
   onOpenScanQR,
+  onNavigateToCustomerTab,
+  customerActiveTab = 'bookings',
 }) => {
   const user = currentUser ?? userProp ?? null;
   const { t } = useTranslation();
 
+  // Active state conditions
+  const isHomeActive = activeView === 'home';
+  const isSearchActive = activeView === 'search';
+  const isBookingsActive = activeView === 'customer-dashboard' && (customerActiveTab === 'bookings' || customerActiveTab === 'queue' || customerActiveTab === 'history');
+  
+  const isProfileActive = 
+    (activeView === 'customer-dashboard' && (customerActiveTab === 'profile' || customerActiveTab === 'favorites')) ||
+    (activeView === 'business-dashboard') ||
+    (activeView === 'admin-panel') ||
+    (activeView === 'operating-partner');
+
+  const handleBookingsClick = () => {
+    if (!user) {
+      onOpenAuth('login');
+      return;
+    }
+    if (onNavigateToCustomerTab) {
+      onNavigateToCustomerTab('bookings');
+    } else {
+      setActiveView('customer-dashboard');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleProfileClick = () => {
+    if (!user) {
+      onOpenAuth('login');
+      return;
+    }
+    if (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') {
+      setActiveView('business-dashboard');
+    } else if (user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
+      setActiveView('admin-panel');
+    } else if (user.role === 'OPERATING_PARTNER' || user.role === 'SALES_MANAGER' || user.role === 'BUSINESS_MANAGER') {
+      setActiveView('operating-partner');
+    } else {
+      // Regular customer
+      if (onNavigateToCustomerTab) {
+        onNavigateToCustomerTab('profile');
+      } else {
+        setActiveView('customer-dashboard');
+      }
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Determine profile button label and icon based on role
+  const getProfileMeta = () => {
+    if (!user) {
+      return {
+        label: t('bottom_profile'),
+        icon: UserIcon,
+      };
+    }
+    if (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') {
+      return {
+        label: t('business_cabinet'),
+        icon: Briefcase,
+      };
+    }
+    if (user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
+      return {
+        label: 'Admin',
+        icon: Shield,
+      };
+    }
+    if (user.role === 'OPERATING_PARTNER' || user.role === 'SALES_MANAGER' || user.role === 'BUSINESS_MANAGER') {
+      return {
+        label: 'Hamkor',
+        icon: Briefcase,
+      };
+    }
+    return {
+      label: t('bottom_profile'),
+      icon: UserIcon,
+    };
+  };
+
+  const profileMeta = getProfileMeta();
+  const ProfileIcon = profileMeta.icon;
+
   return (
     <nav 
-      aria-label="Mobil pastki menyu"
+      aria-label="Mobil pastki navigatsiya"
       className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-lg px-2 pt-1.5 pb-[max(env(safe-area-inset-bottom),0.5rem)]"
     >
       <div className="flex items-center justify-around max-w-lg mx-auto">
@@ -41,16 +126,16 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition min-w-[54px] min-h-[44px] cursor-pointer ${
-            activeView === 'home'
+            isHomeActive
               ? 'text-blue-600 font-bold'
               : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          <Home className={`w-5 h-5 transition-transform ${activeView === 'home' ? 'scale-110 text-blue-600' : ''}`} />
-          <span className="text-[10px] mt-1 font-medium leading-none">{t('bottom_home')}</span>
+          <Home className={`w-5 h-5 transition-transform ${isHomeActive ? 'scale-110 text-blue-600 stroke-[2.4]' : ''}`} />
+          <span className="text-[10px] mt-1 font-semibold leading-none">{t('bottom_home')}</span>
         </button>
 
-        {/* 2. Katalog / Qidiruv */}
+        {/* 2. Katalog */}
         <button
           id="mobile-nav-search"
           onClick={() => {
@@ -58,16 +143,16 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition min-w-[54px] min-h-[44px] cursor-pointer ${
-            activeView === 'search'
+            isSearchActive
               ? 'text-blue-600 font-bold'
               : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          <Search className={`w-5 h-5 transition-transform ${activeView === 'search' ? 'scale-110 text-blue-600' : ''}`} />
-          <span className="text-[10px] mt-1 font-medium leading-none">{t('bottom_catalog')}</span>
+          <Search className={`w-5 h-5 transition-transform ${isSearchActive ? 'scale-110 text-blue-600 stroke-[2.4]' : ''}`} />
+          <span className="text-[10px] mt-1 font-semibold leading-none">{t('bottom_catalog')}</span>
         </button>
 
-        {/* 3. CENTER ACTION: QR Scanner */}
+        {/* 3. QR Scanner (Center Action Button) */}
         <button
           id="mobile-nav-scan-qr"
           onClick={onOpenScanQR}
@@ -79,135 +164,50 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             <QrCode className="w-6 h-6 stroke-[2.2]" />
           </div>
           <span className="text-[10px] mt-0.5 font-bold text-blue-700 leading-none">
-            QR Scanner
+            {t('bottom_scan_qr')}
           </span>
         </button>
 
-        {/* 4. Bronlarim / Jonli Navbat */}
+        {/* 4. Bronlarim */}
         <button
           id="mobile-nav-bookings"
-          onClick={() => {
-            if (!user) {
-              onOpenAuth();
-            } else {
-              setActiveView('customer-dashboard');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-          }}
+          onClick={handleBookingsClick}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition min-w-[54px] min-h-[44px] relative cursor-pointer ${
-            activeView === 'customer-dashboard'
+            isBookingsActive
               ? 'text-blue-600 font-bold'
               : 'text-slate-500 hover:text-slate-800'
           }`}
         >
           <div className="relative">
             {activeQueueCount > 0 ? (
-              <Clock className="w-5 h-5 text-amber-500 animate-pulse" />
+              <Clock className="w-5 h-5 text-amber-500 animate-pulse stroke-[2.4]" />
             ) : (
-              <Calendar className={`w-5 h-5 transition-transform ${activeView === 'customer-dashboard' ? 'scale-110 text-blue-600' : ''}`} />
+              <Calendar className={`w-5 h-5 transition-transform ${isBookingsActive ? 'scale-110 text-blue-600 stroke-[2.4]' : ''}`} />
             )}
             {activeQueueCount > 0 && (
               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full ring-2 ring-white animate-ping" />
             )}
           </div>
-          <span className="text-[10px] mt-1 font-medium leading-none">
+          <span className="text-[10px] mt-1 font-semibold leading-none">
             {activeQueueCount > 0 ? t('live_queue') : t('bottom_bookings')}
           </span>
         </button>
 
-        {/* 5. Biznes yoki Hamkor yoki Admin yoki Profil */}
-        {user?.role === 'OPERATING_PARTNER' || user?.role === 'SALES_MANAGER' || user?.role === 'BUSINESS_MANAGER' ? (
-          <button
-            id="mobile-nav-partner"
-            onClick={() => {
-              setActiveView('operating-partner');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] cursor-pointer ${
-              activeView === 'operating-partner'
-                ? 'text-emerald-500 font-bold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Briefcase className={`w-5 h-5 transition-transform ${activeView === 'operating-partner' ? 'scale-110 text-emerald-500' : ''}`} />
-            <span className="text-[10px] mt-1 font-medium leading-none">Hamkor</span>
-          </button>
-        ) : (user?.role === 'ADMIN' || user?.role === 'FOUNDER' || user?.role === 'OWNER') ? (
-          <button
-            id="mobile-nav-admin"
-            onClick={() => {
-              setActiveView('admin-panel');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] cursor-pointer ${
-              activeView === 'admin-panel' || activeView === 'operating-partner'
-                ? 'text-emerald-600 font-bold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Shield className={`w-5 h-5 transition-transform ${activeView === 'admin-panel' || activeView === 'operating-partner' ? 'scale-110 text-emerald-600' : ''}`} />
-            <span className="text-[10px] mt-1 font-medium leading-none">Boshqaruv</span>
-          </button>
-        ) : user?.role === 'BUSINESS_OWNER' ? (
-          <button
-            id="mobile-nav-business"
-            onClick={() => {
-              setActiveView('business-dashboard');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] cursor-pointer ${
-              activeView === 'business-dashboard'
-                ? 'text-indigo-600 font-bold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Briefcase className={`w-5 h-5 transition-transform ${activeView === 'business-dashboard' ? 'scale-110 text-indigo-600' : ''}`} />
-            <span className="text-[10px] mt-1 font-medium leading-none">{t('business_cabinet')}</span>
-          </button>
-        ) : user?.role === 'STAFF' ? (
-          <button
-            id="mobile-nav-staff"
-            onClick={() => {
-              setActiveView('business-dashboard');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] cursor-pointer ${
-              activeView === 'business-dashboard'
-                ? 'text-indigo-600 font-bold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Briefcase className={`w-5 h-5 transition-transform ${activeView === 'business-dashboard' ? 'scale-110 text-indigo-600' : ''}`} />
-            <span className="text-[10px] mt-1 font-medium leading-none">{t('business_cabinet')}</span>
-          </button>
-        ) : user ? (
-          <button
-            id="mobile-nav-profile"
-            onClick={() => {
-              setActiveView('customer-dashboard');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] cursor-pointer ${
-              activeView === 'customer-dashboard'
-                ? 'text-blue-600 font-bold'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <UserIcon className="w-5 h-5" />
-            <span className="text-[10px] mt-1 font-medium leading-none truncate max-w-[50px]">
-              {user.name.split(' ')[0]}
-            </span>
-          </button>
-        ) : (
-          <button
-            id="mobile-nav-login"
-            onClick={onOpenAuth}
-            className="flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition min-w-[60px] min-h-[44px] text-slate-500 hover:text-blue-600 cursor-pointer"
-          >
-            <LogIn className="w-5 h-5" />
-            <span className="text-[10px] mt-1 font-medium leading-none">{t('sign_in')}</span>
-          </button>
-        )}
+        {/* 5. Profilim */}
+        <button
+          id="mobile-nav-profile"
+          onClick={handleProfileClick}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition min-w-[54px] min-h-[44px] cursor-pointer ${
+            isProfileActive
+              ? 'text-blue-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <ProfileIcon className={`w-5 h-5 transition-transform ${isProfileActive ? 'scale-110 text-blue-600 stroke-[2.4]' : ''}`} />
+          <span className="text-[10px] mt-1 font-semibold leading-none truncate max-w-[58px]">
+            {profileMeta.label}
+          </span>
+        </button>
       </div>
     </nav>
   );

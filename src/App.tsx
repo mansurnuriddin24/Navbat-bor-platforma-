@@ -35,9 +35,16 @@ export default function App() {
   const [activeView, setActiveView] = useState<
     'home' | 'search' | 'business-detail' | 'customer-dashboard' | 'business-dashboard' | 'admin-panel' | 'operating-partner' | 'for-customers' | 'for-business' | 'live-display'
   >('home');
+  const [customerInitialTab, setCustomerInitialTab] = useState<'bookings' | 'queue' | 'favorites' | 'history' | 'profile'>('bookings');
   const [selectedBusinessSlug, setSelectedBusinessSlug] = useState<string | null>(null);
   const [displayToken, setDisplayToken] = useState<string | null>(null);
   const [scanQRModalOpen, setScanQRModalOpen] = useState<boolean>(false);
+
+  const handleNavigateCustomerTab = (tab: 'bookings' | 'queue' | 'favorites' | 'history' | 'profile' = 'bookings') => {
+    setCustomerInitialTab(tab);
+    setActiveView('customer-dashboard');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Live Marketplace Stats
   const [stats, setStats] = useState({
@@ -345,6 +352,7 @@ export default function App() {
         activeQueueCount={activeQueueCount}
         onOpenBusinessOnboarding={() => setOnboardModalOpen(true)}
         onOpenScanQR={() => setScanQRModalOpen(true)}
+        onNavigateToCustomerTab={handleNavigateCustomerTab}
       />
 
       {/* Main View Switcher */}
@@ -709,11 +717,11 @@ export default function App() {
               setAuthModalOpen(true);
             }}
             onBookingSuccess={(booking) => {
-              // Switch to customer dashboard to view bookings
-              setActiveView('customer-dashboard');
+              // Switch to customer dashboard bookings tab
+              handleNavigateCustomerTab('bookings');
             }}
             onGoToBookings={() => {
-              setActiveView('customer-dashboard');
+              handleNavigateCustomerTab('bookings');
             }}
           />
         )}
@@ -722,7 +730,11 @@ export default function App() {
         {activeView === 'customer-dashboard' && currentUser && (
           <CustomerDashboard
             currentUser={currentUser}
-            onExploreBusinesses={() => setActiveView('home')}
+            initialTab={customerInitialTab}
+            onExploreBusinesses={() => {
+              setActiveView('search');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             onSelectBusiness={handleSelectBusiness}
             onUserUpdate={(updated) => setCurrentUser(updated)}
           />
@@ -942,8 +954,11 @@ export default function App() {
         activeView={activeView}
         setActiveView={setActiveView}
         currentUser={currentUser}
-        onOpenAuth={() => {
-          setAuthInitialMode('login');
+        activeQueueCount={activeQueueCount}
+        customerActiveTab={customerInitialTab}
+        onNavigateToCustomerTab={handleNavigateCustomerTab}
+        onOpenAuth={(mode = 'login') => {
+          setAuthInitialMode(mode);
           setAuthModalOpen(true);
         }}
         onOpenScanQR={() => setScanQRModalOpen(true)}

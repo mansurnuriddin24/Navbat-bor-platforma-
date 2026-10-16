@@ -345,6 +345,11 @@ export default function App() {
         return;
       }
 
+      if (hash === '#admin' || hash === '#admin-panel' || path === '/admin') {
+        setActiveView('admin-panel');
+        return;
+      }
+
       if (hash.startsWith('#business/')) {
         const slug = hash.replace('#business/', '');
         setSelectedBusinessSlug(slug);
@@ -816,12 +821,23 @@ export default function App() {
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                 Super administrator paneliga faqat bosh ma’muriyat (Founder) kirish huquqiga ega.
               </p>
-              <button
-                onClick={() => setActiveView('home')}
-                className="mt-5 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition cursor-pointer"
-              >
-                Bosh sahifaga qaytish
-              </button>
+              <div className="flex gap-2 justify-center mt-5">
+                <button
+                  onClick={() => {
+                    setAuthInitialMode('login');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700 transition cursor-pointer shadow-sm"
+                >
+                  Admin sifatida kirish
+                </button>
+                <button
+                  onClick={() => setActiveView('home')}
+                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
+                >
+                  Bosh sahifa
+                </button>
+              </div>
             </div>
           )
         )}

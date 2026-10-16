@@ -34,7 +34,7 @@ import {
 } from './src/telegramBusinessBot.ts';
 
 // --- DATABASE INITIALIZATION ---
-const dbPath = path.join(process.cwd(), 'navbatbor.sqlite');
+const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'navbatbor.sqlite');
 export const db = new DatabaseSync(dbPath);
 
 // Enable WAL mode & foreign keys

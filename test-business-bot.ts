@@ -300,6 +300,7 @@ async function runBusinessBotTestSuite() {
   assert(linkedAuth.business?.id === createdBizId, 'Bog‘langan hisob biznesni boshqara oladi');
 
   // Cleanup test records
+  db.exec('PRAGMA foreign_keys = OFF;');
   db.prepare('DELETE FROM queue_entries WHERE business_id = ?').run(createdBizId);
   db.prepare('DELETE FROM bookings WHERE business_id = ?').run(createdBizId);
   db.prepare('DELETE FROM staff_services WHERE service_id = ?').run(srv.id);
@@ -307,10 +308,12 @@ async function runBusinessBotTestSuite() {
   db.prepare('DELETE FROM services WHERE business_id = ?').run(createdBizId);
   db.prepare('DELETE FROM business_hours WHERE business_id = ?').run(createdBizId);
   db.prepare('DELETE FROM business_memberships WHERE business_id = ?').run(createdBizId);
+  db.prepare('DELETE FROM business_applications WHERE id = ? OR created_business_id = ?').run(appId, createdBizId);
   db.prepare('DELETE FROM businesses WHERE id = ?').run(createdBizId);
+  db.prepare(`DELETE FROM user_sessions WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
+  db.prepare(`DELETE FROM notifications WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
   db.prepare(`DELETE FROM users WHERE id IN (?, ?) OR id LIKE 'usr-walkin-%' OR email LIKE 'blocked_%'`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
-  db.prepare(`DELETE FROM user_sessions WHERE user_id NOT IN (SELECT id FROM users)`).run();
-  db.prepare(`DELETE FROM notifications WHERE user_id NOT IN (SELECT id FROM users)`).run();
+  db.exec('PRAGMA foreign_keys = ON;');
 
   console.log('\n======================================================');
   console.log(`🎉 BARCHA ${passedTests}/${totalTests} TA MAJBURIY TESTLAR MUVAFFAQIYATLI O‘TDI!`);

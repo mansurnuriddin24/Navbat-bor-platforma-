@@ -61,6 +61,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
   const [testMessage, setTestMessage] = useState<string>('Assalomu alaykum! Bu NavbatBor platformasining sinov bildirishnomasi.');
   const [testStatus, setTestStatus] = useState<string | null>(null);
 
+  // Telegram Broadcast & Advanced Messaging State
+  const [tgTarget, setTgTarget] = useState<'single_customer' | 'single_business' | 'all_customers' | 'all_businesses'>('all_customers');
+  const [tgSelectedRecipientId, setTgSelectedRecipientId] = useState<string>('');
+  const [tgTemplateType, setTgTemplateType] = useState<string>('CUSTOM');
+  const [tgBroadcastLoading, setTgBroadcastLoading] = useState<boolean>(false);
+  const [tgBroadcastResult, setTgBroadcastResult] = useState<any | null>(null);
+  const [tgRecipientsCount, setTgRecipientsCount] = useState<{ customersCount: number; businessesCount: number; totalCount: number } | null>(null);
+  const [tgCustomersList, setTgCustomersList] = useState<any[]>([]);
+  const [tgBusinessesList, setTgBusinessesList] = useState<any[]>([]);
+
   // Admin User Provisioning & Password Management
   const [showCreateUserModal, setShowCreateUserModal] = useState<boolean>(false);
   const [newUserName, setNewUserName] = useState<string>('');
@@ -163,6 +173,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
 
       // Load bookings
       loadBookings(1, bookingStatusFilter, bookingSearch);
+      loadTelegramRecipients();
     } catch (err) {
       console.error('Error loading admin panel:', err);
     } finally {
@@ -189,6 +200,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'telegram') {
+      loadTelegramRecipients();
+    }
+  }, [activeTab]);
 
   const handleUpdateBusiness = async (id: string, data: { status?: string; is_verified?: boolean; reason?: string }) => {
     setActionLoading(id);
@@ -556,6 +573,65 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
       setTelegramLogs(tgLogs);
     } catch (err: any) {
       setTestStatus(`Xatolik: ${err.message}`);
+    }
+  };
+
+  const loadTelegramRecipients = async () => {
+    try {
+      const [counts, custs, bizs] = await Promise.all([
+        api.getAdminTelegramRecipientsCount(),
+        api.getAdminTelegramRecipients('customer'),
+        api.getAdminTelegramRecipients('business')
+      ]);
+      setTgRecipientsCount(counts);
+      setTgCustomersList(custs);
+      setTgBusinessesList(bizs);
+    } catch (e) {}
+  };
+
+  const handleTemplateChange = (tmpl: string) => {
+    setTgTemplateType(tmpl);
+    if (tmpl === 'BOOKING_CONFIRMED') {
+      setTestMessage(`✅ <b>Qabulingiz tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nMuassasa: <b>Klinika / Salon</b>\nXizmat: <b>Birlamchi konsultatsiya</b>\nSana va vaqt: <b>Bugun, 15:00</b>\nIltimos, belgilangan vaqtdan 5 daqiqa oldin yetib kelishingizni so‘raymiz.`);
+    } else if (tmpl === 'BOOKING_CHANGED') {
+      setTestMessage(`⏰ <b>Qabul vaqti o‘zgardi</b>\n━━━━━━━━━━━━━━━━\nHurmatli mijoz, mutaxassis jadvalidagi o‘zgarish tufayli sizning qabul vaqtingiz yangilandi:\nYangi vaqt: <b>16:30</b>\nSavollaringiz bo‘lsa, qo‘llab-quvvatlash bilan bog‘laning.`);
+    } else if (tmpl === 'BOOKING_CANCELLED') {
+      setTestMessage(`❌ <b>Qabul bekor qilindi</b>\n━━━━━━━━━━━━━━━━\nSizning broningiz bekor qilindi.\nQayta yozilish uchun NavbatBor ilovasidan foydalanishingiz mumkin.`);
+    } else if (tmpl === 'QUEUE_REMINDER') {
+      setTestMessage(`🎫 <b>Navbat eslatmasi!</b>\n━━━━━━━━━━━━━━━━\nSizning navbatingiz yetib kelishiga oz qoldi (oldingizda 1-2 kishi qoldi).\nIltimos, qabul xonasi oldida tayyor turing.`);
+    } else if (tmpl === 'NEWS') {
+      setTestMessage(`📢 <b>NavbatBor: Yangi imkoniyatlar!</b>\n━━━━━━━━━━━━━━━━\nPlatformamizda yangi tibbiy klinika va go‘zallik salonlari ish boshladi.\nHoziroq ilovaga kiring va navbatsiz qulay xizmatlardan foydalaning!`);
+    } else {
+      setTestMessage(`Assalomu alaykum! Bu NavbatBor platformasining bildirishnomasi.`);
+    }
+  };
+
+  const handleSendTelegramBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testMessage.trim()) return;
+    setTgBroadcastLoading(true);
+    setTgBroadcastResult(null);
+    setTestStatus('Yuborilmoqda...');
+
+    try {
+      const idempotencyKey = 'bk_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      const res = await api.sendAdminTelegramBroadcast({
+        target: tgTarget,
+        target_id: tgSelectedRecipientId || undefined,
+        chat_id: testChatId || undefined,
+        message: testMessage,
+        template_type: tgTemplateType,
+        idempotency_key: idempotencyKey,
+      });
+      setTgBroadcastResult(res);
+      setTestStatus(`Yuborildi: ${res.sent} ta, Bloklagan: ${res.blocked} ta, Xato: ${res.failed} ta`);
+      const tgLogs = await api.getAdminTelegramLogs();
+      setTelegramLogs(tgLogs);
+      loadTelegramRecipients();
+    } catch (err: any) {
+      setTestStatus(`Xatolik: ${err.message}`);
+    } finally {
+      setTgBroadcastLoading(false);
     }
   };
 
@@ -1873,128 +1949,463 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
       {/* ======================================================== */}
       {activeTab === 'telegram' && (
         <div className="space-y-6">
-          {/* Telegram Test & Configuration Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Direct Test Dispatcher */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
-              <div className="flex items-center gap-2 mb-3">
-                <Send className="w-5 h-5 text-sky-600" />
-                <h3 className="text-sm font-black text-slate-900">Telegram Sinov Xabari Yuborish</h3>
+          {/* Header & Stats Banner */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 bg-sky-50 text-sky-600 rounded-xl">
+                    <Send className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">Telegram Xabarlar va Bildirishnomalar Markazi</h3>
+                    <p className="text-xs text-slate-500">Mijozlar va biznes egalariga shaxsiy yoki ommaviy xabarnomalar yuborish</p>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-slate-500 mb-4">
-                Istalgan Telegram foydalanuvchisi yoki guruh chat_id sini kiritib xabarnomani sinab ko‘ring.
-              </p>
 
-              <form onSubmit={handleSendTelegramTest} className="space-y-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">
-                    Telegram Chat ID:
-                  </label>
-                  <input
-                    type="text"
-                    value={testChatId}
-                    onChange={(e) => setTestChatId(e.target.value)}
-                    placeholder="Masalan: 123456789 yoki -10012345678"
-                    required
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:outline-sky-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">
-                    Xabar Matni:
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={testMessage}
-                    onChange={(e) => setTestMessage(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-sky-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="submit"
-                    className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Telegramga Yuborish</span>
-                  </button>
-                  {testStatus && (
-                    <span className="text-xs font-semibold text-slate-600">{testStatus}</span>
-                  )}
-                </div>
-              </form>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    loadTelegramRecipients();
+                    api.getAdminTelegramLogs().then(setTelegramLogs).catch(() => {});
+                    showToast('Telegram ma’lumotlari yangilandi', 'info');
+                  }}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Yangilash</span>
+                </button>
+              </div>
             </div>
 
-            {/* Telegram Bot Capabilities & Info */}
-            <div className="bg-sky-50 border border-sky-100 rounded-2xl p-6 shadow-xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <MessageSquare className="w-5 h-5 text-sky-700" />
-                  <h3 className="text-sm font-black text-sky-950">Avtomatik Telegram Xabarnomalar</h3>
+            {/* Recipient Overview Counters */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5 pt-5 border-t border-slate-100">
+              <div className="p-3.5 bg-sky-50/70 border border-sky-100 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-sky-800 uppercase tracking-wider block">Mijozlar Boti (@Navbat1Uzb_bot)</span>
+                  <span className="text-xl font-black text-sky-950 mt-0.5 block">
+                    {tgRecipientsCount?.customersCount ?? 0} <span className="text-xs font-medium text-sky-700">foydalanuvchi</span>
+                  </span>
                 </div>
-                <p className="text-xs text-sky-800 leading-relaxed">
-                  NavbatBor quyidagi hodisalarda Telegram orqali xabar yuboradi:
-                </p>
-
-                <ul className="text-xs text-sky-900 space-y-2 mt-3 list-disc pl-4">
-                  <li><strong>Yangi bron kelganda:</strong> Biznes egasi va mijozga to‘liq ma’lumot.</li>
-                  <li><strong>Jonli navbat chaqirilganda:</strong> Mijozga chipta raqami bilan bildirishnoma.</li>
-                  <li><strong>Tarif tugashiga 3 kun qolganda:</strong> 1 oylik obunani uzaytirish ogohlantirishi.</li>
-                  <li><strong>Tarif tugaganda:</strong> Xizmatlarni to‘xtab qolmasligi haqida darhol xabar.</li>
-                </ul>
+                <Users className="w-6 h-6 text-sky-400" />
               </div>
 
-              <div className="pt-4 mt-4 border-t border-sky-200/60 text-[11px] text-sky-700">
-                💡 <em>Token kiritilmagan holatda barcha xabarlar simulyatsiya qilinib, pastdagi jurnalda saqlanadi.</em>
+              <div className="p-3.5 bg-purple-50/70 border border-purple-100 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-purple-800 uppercase tracking-wider block">Biznes Boti (@navbatbor_bizness_bot)</span>
+                  <span className="text-xl font-black text-purple-950 mt-0.5 block">
+                    {tgRecipientsCount?.businessesCount ?? 0} <span className="text-xs font-medium text-purple-700">biznes egasi</span>
+                  </span>
+                </div>
+                <Building2 className="w-6 h-6 text-purple-400" />
+              </div>
+
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-100 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">Jami Bog‘langanlar</span>
+                  <span className="text-xl font-black text-emerald-950 mt-0.5 block">
+                    {tgRecipientsCount?.totalCount ?? 0} <span className="text-xs font-medium text-emerald-700">auditoriya</span>
+                  </span>
+                </div>
+                <Activity className="w-6 h-6 text-emerald-400" />
+              </div>
+            </div>
+          </div>
+
+          {/* Dispatch Section & Live Preview */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left 7 cols: Composer Form */}
+            <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-5">
+              <form onSubmit={handleSendTelegramBroadcast} className="space-y-4">
+                {/* 1. Target Selector */}
+                <div>
+                  <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block mb-2">
+                    1. Qabul Qiluvchi Auditoriya:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => { setTgTarget('all_customers'); setTgSelectedRecipientId(''); }}
+                      className={`p-3 rounded-xl border text-left font-bold transition flex items-center gap-2 ${
+                        tgTarget === 'all_customers'
+                          ? 'bg-sky-50 border-sky-500 text-sky-900 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 shrink-0 text-sky-600" />
+                      <div>
+                        <div>Barcha Mijozlar</div>
+                        <div className="text-[10px] font-normal text-slate-500">Mijozlar boti orqali</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setTgTarget('all_businesses'); setTgSelectedRecipientId(''); }}
+                      className={`p-3 rounded-xl border text-left font-bold transition flex items-center gap-2 ${
+                        tgTarget === 'all_businesses'
+                          ? 'bg-purple-50 border-purple-500 text-purple-900 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Building2 className="w-4 h-4 shrink-0 text-purple-600" />
+                      <div>
+                        <div>Faqat Biznes Egalari</div>
+                        <div className="text-[10px] font-normal text-slate-500">Biznes boti orqali</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTgTarget('single_customer')}
+                      className={`p-3 rounded-xl border text-left font-bold transition flex items-center gap-2 ${
+                        tgTarget === 'single_customer'
+                          ? 'bg-sky-50 border-sky-500 text-sky-900 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Send className="w-4 h-4 shrink-0 text-sky-600" />
+                      <div>
+                        <div>Bitta Mijozga</div>
+                        <div className="text-[10px] font-normal text-slate-500">Shaxsiy xabar</div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTgTarget('single_business')}
+                      className={`p-3 rounded-xl border text-left font-bold transition flex items-center gap-2 ${
+                        tgTarget === 'single_business'
+                          ? 'bg-purple-50 border-purple-500 text-purple-900 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Building2 className="w-4 h-4 shrink-0 text-purple-600" />
+                      <div>
+                        <div>Bitta Biznes Egasiga</div>
+                        <div className="text-[10px] font-normal text-slate-500">Shaxsiy xabar</div>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Single Recipient Pickers */}
+                {tgTarget === 'single_customer' && (
+                  <div className="p-3 bg-sky-50/60 border border-sky-200 rounded-xl space-y-2">
+                    <label className="text-[11px] font-bold text-sky-900 block">
+                      Mijozni tanlang yoki Telegram Chat ID kiriting:
+                    </label>
+                    <select
+                      value={tgSelectedRecipientId}
+                      onChange={(e) => {
+                        setTgSelectedRecipientId(e.target.value);
+                        const sel = tgCustomersList.find((c) => c.id === e.target.value);
+                        if (sel && sel.telegram_chat_id) {
+                          setTestChatId(sel.telegram_chat_id);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-sky-200 rounded-lg text-xs focus:outline-sky-500"
+                    >
+                      <option value="">-- Ro‘yxatdan tanlash (ixtiyoriy) --</option>
+                      {tgCustomersList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name || 'Mijoz'} ({c.phone || c.email || 'Telefon yo‘q'}) - Chat ID: {c.telegram_chat_id || 'Ulanmagan'}
+                        </option>
+                      ))}
+                    </select>
+                    <div>
+                      <input
+                        type="text"
+                        value={testChatId}
+                        onChange={(e) => setTestChatId(e.target.value)}
+                        placeholder="Telegram Chat ID (masalan: 123456789)"
+                        className="w-full px-3 py-1.5 bg-white border border-sky-200 rounded-lg text-xs font-mono focus:outline-sky-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {tgTarget === 'single_business' && (
+                  <div className="p-3 bg-purple-50/60 border border-purple-200 rounded-xl space-y-2">
+                    <label className="text-[11px] font-bold text-purple-900 block">
+                      Biznes egasini tanlang yoki Telegram Chat ID kiriting:
+                    </label>
+                    <select
+                      value={tgSelectedRecipientId}
+                      onChange={(e) => {
+                        setTgSelectedRecipientId(e.target.value);
+                        const sel = tgBusinessesList.find((b) => b.id === e.target.value || b.owner_id === e.target.value);
+                        if (sel && sel.owner_telegram_chat_id) {
+                          setTestChatId(sel.owner_telegram_chat_id);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-purple-200 rounded-lg text-xs focus:outline-purple-500"
+                    >
+                      <option value="">-- Ro‘yxatdan tanlash (ixtiyoriy) --</option>
+                      {tgBusinessesList.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.owner_name || 'Egasi'}) - Chat ID: {b.owner_telegram_chat_id || 'Ulanmagan'}
+                        </option>
+                      ))}
+                    </select>
+                    <div>
+                      <input
+                        type="text"
+                        value={testChatId}
+                        onChange={(e) => setTestChatId(e.target.value)}
+                        placeholder="Telegram Chat ID (masalan: 123456789)"
+                        className="w-full px-3 py-1.5 bg-white border border-purple-200 rounded-lg text-xs font-mono focus:outline-purple-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Message Templates */}
+                <div>
+                  <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block mb-2">
+                    2. Tayyor Xabar Shabloni:
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { key: 'CUSTOM', label: '✍️ Erkin xabar' },
+                      { key: 'BOOKING_CONFIRMED', label: '✅ Qabul tasdiqlandi' },
+                      { key: 'BOOKING_CHANGED', label: '⏰ Vaqt o‘zgardi' },
+                      { key: 'BOOKING_CANCELLED', label: '❌ Bekor qilindi' },
+                      { key: 'QUEUE_REMINDER', label: '🎫 Navbat eslatmasi' },
+                      { key: 'NEWS', label: '📢 Yangiliklar' },
+                    ].map((tmpl) => (
+                      <button
+                        key={tmpl.key}
+                        type="button"
+                        onClick={() => handleTemplateChange(tmpl.key)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                          tgTemplateType === tmpl.key
+                            ? 'bg-sky-600 text-white shadow-xs'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {tmpl.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Message Body */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      3. Xabar Matni (HTML teglari ishlaydi):
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {testMessage.length} ta belgi
+                    </span>
+                  </div>
+                  <textarea
+                    rows={5}
+                    value={testMessage}
+                    onChange={(e) => setTestMessage(e.target.value)}
+                    required
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-sans focus:outline-sky-500 focus:bg-white transition"
+                    placeholder="Xabar matnini kiriting..."
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500 flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-600">Qo‘llab-quvvatlanadi:</span>
+                    <code>&lt;b&gt;qalin&lt;/b&gt;</code>,
+                    <code>&lt;i&gt;kursiv&lt;/i&gt;</code>,
+                    <code>&lt;code&gt;kod&lt;/code&gt;</code>,
+                    <code>&lt;a href="..."&gt;havola&lt;/a&gt;</code>
+                  </div>
+                </div>
+
+                {/* Action Bar */}
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-100">
+                  <div className="text-xs font-semibold text-slate-600">
+                    Auditoriya: <strong className="text-slate-900">
+                      {tgTarget === 'all_customers' && `${tgRecipientsCount?.customersCount ?? 0} ta mijoz`}
+                      {tgTarget === 'all_businesses' && `${tgRecipientsCount?.businessesCount ?? 0} ta biznes egasi`}
+                      {(tgTarget === 'single_customer' || tgTarget === 'single_business') && '1 ta shaxsiy qabul qiluvchi'}
+                    </strong>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={tgBroadcastLoading || !testMessage.trim()}
+                    className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                  >
+                    {tgBroadcastLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Yuborilmoqda...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        <span>Xabarni Yuborish</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {/* Broadcast Result Banner */}
+              {tgBroadcastResult && (
+                <div className="mt-4 p-4 rounded-xl border bg-slate-50 border-slate-200 animate-in fade-in">
+                  <h4 className="text-xs font-bold text-slate-900 mb-2 flex items-center gap-1.5">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>So‘nggi Yuborish Natijasi:</span>
+                  </h4>
+                  <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                    <div className="bg-white p-2 rounded-lg border border-slate-100">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">Jami</div>
+                      <div className="text-sm font-black text-slate-900 mt-0.5">{tgBroadcastResult.total}</div>
+                    </div>
+                    <div className="bg-emerald-50/70 p-2 rounded-lg border border-emerald-100 text-emerald-800">
+                      <div className="text-[10px] uppercase font-bold">Yetkazildi</div>
+                      <div className="text-sm font-black text-emerald-700 mt-0.5">{tgBroadcastResult.sent}</div>
+                    </div>
+                    <div className="bg-amber-50/70 p-2 rounded-lg border border-amber-100 text-amber-800">
+                      <div className="text-[10px] uppercase font-bold">Bloklagan</div>
+                      <div className="text-sm font-black text-amber-700 mt-0.5">{tgBroadcastResult.blocked}</div>
+                    </div>
+                    <div className="bg-rose-50/70 p-2 rounded-lg border border-rose-100 text-rose-800">
+                      <div className="text-[10px] uppercase font-bold">Xatolik</div>
+                      <div className="text-sm font-black text-rose-700 mt-0.5">{tgBroadcastResult.failed}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right 5 cols: Live Preview & Delivery Protections */}
+            <div className="lg:col-span-5 space-y-4">
+              {/* Telegram Preview Mockup */}
+              <div className="bg-slate-900 rounded-2xl p-4 text-white shadow-md">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-sky-500 flex items-center justify-center font-bold text-xs text-white">
+                      NB
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold leading-none">
+                        {tgTarget === 'all_businesses' || tgTarget === 'single_business'
+                          ? 'NavbatBor Biznes Boti'
+                          : 'NavbatBor Mijozlar Boti'}
+                      </div>
+                      <div className="text-[10px] text-sky-400 mt-0.5">
+                        {tgTarget === 'all_businesses' || tgTarget === 'single_business'
+                          ? '@navbatbor_bizness_bot'
+                          : '@Navbat1Uzb_bot'}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-mono">
+                    Jonli Ko‘rinish
+                  </span>
+                </div>
+
+                {/* Message Bubble Mockup */}
+                <div className="bg-slate-800/80 rounded-2xl p-4 text-slate-100 text-xs leading-relaxed border border-slate-700/60 shadow-inner">
+                  <div
+                    className="whitespace-pre-wrap font-sans"
+                    dangerouslySetInnerHTML={{
+                      __html: testMessage || '<i class="text-slate-400">Xabar matni kiritilmagan...</i>'
+                    }}
+                  />
+                  <div className="mt-2 pt-2 border-t border-slate-700/40 flex items-center justify-end gap-1 text-[10px] text-slate-400 font-mono">
+                    <span>{new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })}</span>
+                    <span className="text-sky-400">✓✓</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Delivery & Anti-Abuse Protections Card */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
+                <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
+                  <Shield className="w-4 h-4 text-emerald-600" />
+                  <span>Xavfsizlik va Xabarlashuv Qoidalari:</span>
+                </div>
+
+                <ul className="text-[11px] text-slate-600 space-y-2 list-disc pl-4 leading-relaxed">
+                  <li>
+                    <strong>Rate Limiting:</strong> Telegram Bot API limitlariga mos ravishda xabarlar sekundiga 30 tagacha tezlikda navbat bilan uzatiladi.
+                  </li>
+                  <li>
+                    <strong>Bloklanganlar izolyatsiyasi:</strong> Agar foydalanuvchi botni bloklagan bo‘lsa, u jurnalga qayd qilinadi va boshqa foydalanuvchilarga xabar yetkazilishi to‘xtamaydi.
+                  </li>
+                  <li>
+                    <strong>Idempotentlik:</strong> Takroriy bosilishlar va duplicate yuborilishlardan himoyalangan kalit mexanizmi mavjud.
+                  </li>
+                  <li>
+                    <strong>Rol ajratilishi:</strong> Mijozlar xabarlari faqat mijoz botidan, biznes egalari xabarlari esa biznes botidan jo‘natiladi.
+                  </li>
+                </ul>
               </div>
             </div>
           </div>
 
           {/* Telegram Logs Table */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs overflow-x-auto">
-            <h4 className="text-sm font-black text-slate-900 mb-4">Telegram Xabarnomalar Jurnali ({telegramLogs.length})</h4>
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4">Vaqt</th>
-                  <th className="py-3 px-4">Qabul qiluvchi</th>
-                  <th className="py-3 px-4">Chat ID</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Xabar Mazmuni</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {telegramLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/80 transition">
-                    <td className="py-3 px-4 font-mono text-slate-500 whitespace-nowrap">{log.created_at}</td>
-                    <td className="py-3 px-4 font-bold text-slate-800">
-                      <span className="px-2 py-0.5 rounded text-[10px] bg-slate-100">
-                        {log.recipient_type}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-600">{log.chat_id || 'Noma‘lum'}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          log.status === 'SENT'
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : log.status === 'SENT_SIMULATED'
-                            ? 'bg-sky-50 text-sky-700'
-                            : 'bg-rose-50 text-rose-700'
-                        }`}
-                      >
-                        {log.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-700 max-w-md truncate font-sans">
-                      {log.message?.replace(/<[^>]*>?/gm, '')}
-                    </td>
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-black text-slate-900">
+                Telegram Xabarlar Jurnali va Tarixi ({telegramLogs.length})
+              </h4>
+              <span className="text-xs text-slate-400 font-mono">So‘nggi 50 ta amal</span>
+            </div>
+
+            {telegramLogs.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400 font-medium">
+                Telegram xabarnomalar jurnali bo‘sh.
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Vaqt</th>
+                    <th className="py-3 px-4">Qabul qiluvchi</th>
+                    <th className="py-3 px-4">Chat ID</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Xabar Mazmuni</th>
+                    <th className="py-3 px-4">Xato Sababi</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {telegramLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/80 transition">
+                      <td className="py-3 px-4 font-mono text-slate-500 whitespace-nowrap">{log.created_at}</td>
+                      <td className="py-3 px-4 font-bold text-slate-800">
+                        <span className="px-2 py-0.5 rounded text-[10px] bg-slate-100">
+                          {log.recipient_type}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-600">{log.chat_id || 'Noma‘lum'}</td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            log.status === 'SENT'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : log.status === 'SENT_SIMULATED'
+                              ? 'bg-sky-50 text-sky-700'
+                              : log.status === 'BLOCKED'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-rose-50 text-rose-700'
+                          }`}
+                        >
+                          {log.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-slate-700 max-w-xs truncate font-sans">
+                        {log.message?.replace(/<[^>]*>?/gm, '')}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px] text-slate-500 max-w-xs truncate">
+                        {log.error_message || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

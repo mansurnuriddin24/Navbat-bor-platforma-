@@ -28,7 +28,9 @@ import {
   approveBusinessApplication,
   rejectBusinessApplication,
   notifyBusinessOwnerViaBusinessBot,
-  setBusinessBotHooks
+  setBusinessBotHooks,
+  getBusinessBotUsername,
+  sendBusinessBotMessage
 } from './src/telegramBusinessBot.ts';
 
 // --- DATABASE INITIALIZATION ---
@@ -3682,8 +3684,8 @@ function broadcastQueueUpdate(businessId: string, payload: any) {
   }
 }
 
-// Wire business bot real-time queue synchronization hooks
-setBusinessBotHooks({ broadcastQueueUpdate, notifyQueueCalled });
+// Wire business bot real-time queue synchronization and auth hooks
+setBusinessBotHooks({ broadcastQueueUpdate, notifyQueueCalled, authenticateTelegramUser });
 
 function getCurrentQueueState(businessId: string) {
   const current = db.prepare(`
@@ -6258,22 +6260,30 @@ app.post('/api/businesses/register', (req, res) => {
   }
 
   let sessionToken: string | null = null;
-  // If user not authenticated, register owner account
+  // If user not authenticated, authenticate with password if account exists or register new owner account
   if (!user) {
     if (!owner_name || !owner_email || !owner_password) {
       return res.status(400).json({ error: 'Biznes egasi ma’lumotlarini (ism, email va parol) kiriting yoki tizimga kiring' });
     }
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(owner_email);
+    const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(owner_email) as any;
     if (existing) {
-      return res.status(400).json({ error: 'Ushbu email bilan akkaunt mavjud. Iltimos, tizimga kiring.' });
+      if (existing.password_hash === hashPassword(owner_password)) {
+        user = existing;
+        sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
+        db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, existing.id);
+        db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ?").run(existing.id);
+      } else {
+        return res.status(400).json({ error: 'Ushbu email bilan akkaunt mavjud. Iltimos, hisobingiz parolini to‘g‘ri kiriting yoki avval tizimga kiring.' });
+      }
+    } else {
+      const newOwnerId = 'usr-' + crypto.randomUUID().slice(0, 8);
+      db.prepare('INSERT INTO users (id, name, email, phone, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)').run(
+        newOwnerId, owner_name, owner_email, owner_phone || phone, hashPassword(owner_password), 'BUSINESS_OWNER'
+      );
+      sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
+      db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, newOwnerId);
+      user = { id: newOwnerId, name: owner_name, email: owner_email, phone: owner_phone || phone, role: 'BUSINESS_OWNER', status: 'ACTIVE' } as any;
     }
-    const newOwnerId = 'usr-' + crypto.randomUUID().slice(0, 8);
-    db.prepare('INSERT INTO users (id, name, email, phone, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)').run(
-      newOwnerId, owner_name, owner_email, owner_phone || phone, hashPassword(owner_password), 'BUSINESS_OWNER'
-    );
-    sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
-    db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, newOwnerId);
-    user = { id: newOwnerId, name: owner_name, email: owner_email, phone: owner_phone || phone, role: 'BUSINESS_OWNER', status: 'ACTIVE' } as any;
   } else {
     // Elevate role to BUSINESS_OWNER if needed
     db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ?").run(user.id);
@@ -6299,6 +6309,31 @@ app.post('/api/businesses/register', (req, res) => {
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', 'PRO', 1, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
   `).run(bizId, user.id, name, slug, category_id, city_id, district || '', address, phone, description || '', finalLat, finalLng, trialExpiryDate, nowIso);
+
+  // Also record in business_applications for admin audit and bot synchronization
+  const appId = 'app-' + crypto.randomUUID().slice(0, 8);
+  db.prepare(`
+    INSERT OR REPLACE INTO business_applications (
+      id, telegram_user_id, telegram_chat_id, telegram_username,
+      business_name, owner_name, owner_phone, category_id, city_id,
+      district, address, description, status, created_business_id, created_at, reviewed_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(
+    appId,
+    user.telegram_user_id || user.telegram_chat_id || 'web_onboard',
+    user.telegram_chat_id || 'web_onboard',
+    user.telegram_username || null,
+    name,
+    user.name || owner_name,
+    owner_phone || phone,
+    category_id,
+    city_id,
+    district || '',
+    address,
+    description || '',
+    bizId
+  );
 
   // Add customized business hours
   const activeDays = Array.isArray(work_days) ? work_days.map(Number) : [1, 2, 3, 4, 5, 6];
@@ -7308,8 +7343,19 @@ app.post('/api/auth/telegram-webapp', (req, res) => {
   });
 });
 
+export function parseSessionExpiryDate(expiresAt: any): Date {
+  if (!expiresAt) return new Date(0);
+  if (expiresAt instanceof Date) return expiresAt;
+  let str = String(expiresAt).trim();
+  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('T')) {
+    str = str.replace(' ', 'T') + 'Z';
+  }
+  return new Date(str);
+}
+
 // Create Telegram Browser Quick Login / Register Session (Single-use, short-lived 5 min)
 app.post('/api/auth/telegram-session', (req, res) => {
+  const { bot_type } = req.body || {};
   const sessionId = 'auth_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
   const now = new Date();
@@ -7321,7 +7367,8 @@ app.post('/api/auth/telegram-session', (req, res) => {
     VALUES (?, ?, 'PENDING', ?, ?)
   `).run(sessionId, code, createdAt, expiresAt);
 
-  const botUsername = getBotUsername();
+  const isBusiness = bot_type === 'business';
+  const botUsername = isBusiness ? getBusinessBotUsername() : getBotUsername();
   const deepLink = `https://t.me/${botUsername}?start=${sessionId}`;
   const tgDirect = `tg://resolve?domain=${botUsername}&start=${sessionId}`;
 
@@ -7332,7 +7379,8 @@ app.post('/api/auth/telegram-session', (req, res) => {
     botUrl: `https://t.me/${botUsername}`,
     deepLink,
     tgDirect,
-    expiresAt
+    expiresAt,
+    botType: isBusiness ? 'business' : 'customer'
   });
 });
 
@@ -7347,7 +7395,7 @@ app.get('/api/auth/telegram-session/:sessionId', (req, res) => {
     return res.status(404).json({ error: 'Sessiya topilmadi' });
   }
 
-  if (session.status === 'PENDING' && new Date(session.expires_at) < new Date()) {
+  if (session.status === 'PENDING' && parseSessionExpiryDate(session.expires_at) < new Date()) {
     db.prepare("UPDATE telegram_auth_sessions SET status = 'EXPIRED' WHERE id = ?").run(sessionId);
     return res.json({ status: 'EXPIRED' });
   }
@@ -9667,7 +9715,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         return;
       }
 
-      if (session.status === 'EXPIRED' || new Date(session.expires_at) < new Date()) {
+      if (session.status === 'EXPIRED' || parseSessionExpiryDate(session.expires_at) < new Date()) {
         db.prepare("UPDATE telegram_auth_sessions SET status = 'EXPIRED' WHERE id = ?").run(sessionId);
         await sendTelegramAlert({
           chatId,
@@ -9711,7 +9759,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
       const code = text.trim();
       const session = db.prepare('SELECT * FROM telegram_auth_sessions WHERE code = ?').get(code) as any;
       if (session) {
-        if (session.status === 'EXPIRED' || new Date(session.expires_at) < new Date()) {
+        if (session.status === 'EXPIRED' || parseSessionExpiryDate(session.expires_at) < new Date()) {
           db.prepare("UPDATE telegram_auth_sessions SET status = 'EXPIRED' WHERE id = ?").run(session.id);
           await sendTelegramAlert({
             chatId,
@@ -9993,6 +10041,29 @@ async function processTelegramUpdate(update: any): Promise<void> {
       }
     }
 
+    // Explicit /start or /menu command (Plain /start, /start@bot, /menu)
+    if (text === '/start' || text.startsWith('/start@') || text === '/start help' || text === '/menu') {
+      const { user: authedUser } = authenticateTelegramUser(chatId, {
+        first_name: from.first_name,
+        last_name: from.last_name,
+        username: from.username
+      });
+
+      const userMode = getTelegramUserMode(chatId);
+      if (userMode === 'BUSINESS' && bizInfo) {
+        await sendTelegramBusinessPanel(chatId, bizInfo);
+        return;
+      }
+      if (userMode === 'ADMIN' && adminUser) {
+        await sendTelegramAdminPanel(chatId, adminUser);
+        return;
+      }
+
+      // Default: Customer Menu
+      await sendTelegramCustomerMenu(chatId, authedUser);
+      return;
+    }
+
     // 2. Contact shared by user (1-tap registration)
     if (message.contact && message.contact.phone_number) {
       let rawPhone = message.contact.phone_number.replace(/[^0-9]/g, '');
@@ -10146,7 +10217,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // 2d. /biznes or business registration info
-    if (text === '/biznes' || text === '/business' || text === '🏢 Biznes egalari uchun' || text.toLowerCase().includes('biznes')) {
+    if (text === '/biznes' || text === '/business' || text === '🏢 Biznes egalari uchun' || (!text.startsWith('/') && text.toLowerCase().includes('biznes'))) {
       await sendTelegramAlert({
         chatId,
         message: `🏢 <b>Biznes Egalari Uchun NavbatBor Tizimi:</b>\n` +
@@ -10170,7 +10241,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // 3. /navbat or checking active queue
-    if (text === '/navbat' || text.toLowerCase().includes('navbat')) {
+    if (text === '/navbat' || text === '🎫 Mening navbatim' || (!text.startsWith('/') && text.toLowerCase().includes('navbat'))) {
       const user = db.prepare('SELECT id, name FROM users WHERE telegram_chat_id = ?').get(chatId) as any;
       const activeQueue = db.prepare(`
         SELECT q.*, b.name as business_name, b.slug as business_slug, b.address, s.name as service_name
@@ -10214,7 +10285,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // 4. /bronlar or checking bookings
-    if (text === '/bronlar' || text.toLowerCase().includes('bron')) {
+    if (text === '/bronlar' || text === '📋 Mening bronlarim' || (!text.startsWith('/') && text.toLowerCase().includes('bron'))) {
       const { user } = authenticateTelegramUser(chatId, {
         first_name: from.first_name,
         last_name: from.last_name,
@@ -10426,7 +10497,13 @@ async function startTelegramPolling() {
               console.error('[Telegram Poller] Error in processTelegramUpdate:', uErr);
             }
           }
+        } else if (!data.ok) {
+          console.error('[Telegram Poller] Telegram API error:', data.error_code, data.description);
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
+      } else {
+        console.error(`[Telegram Poller] HTTP ${resp.status}`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     } catch (err: any) {
       // Small delay on timeout or network glitch
@@ -11101,6 +11178,181 @@ app.post('/api/admin/telegram/send', requireAuth, requireRole(['ADMIN']), async 
   });
 
   res.json(result);
+});
+
+// Admin: Telegram Recipients Count (Live Preview Before Sending)
+app.get('/api/admin/telegram/recipients-count', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'FOUNDER']), (req, res) => {
+  const customersCount = (db.prepare(`
+    SELECT count(DISTINCT telegram_chat_id) as c 
+    FROM users 
+    WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id != '' AND role = 'CUSTOMER'
+  `).get() as any)?.c || 0;
+
+  const businessesCount = (db.prepare(`
+    SELECT count(DISTINCT COALESCE(b.telegram_chat_id, u.telegram_chat_id)) as c
+    FROM businesses b
+    LEFT JOIN users u ON b.owner_id = u.id
+    WHERE (b.telegram_chat_id IS NOT NULL AND b.telegram_chat_id != '')
+       OR (u.telegram_chat_id IS NOT NULL AND u.telegram_chat_id != '')
+  `).get() as any)?.c || 0;
+
+  res.json({
+    customersCount,
+    businessesCount,
+    totalCount: customersCount + businessesCount
+  });
+});
+
+// Admin: Telegram Recipients List (Select Single Customer or Business)
+app.get('/api/admin/telegram/recipients', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'FOUNDER']), (req, res) => {
+  const { type = 'customer' } = req.query;
+  if (type === 'business') {
+    const list = db.prepare(`
+      SELECT b.id, b.name, b.phone, COALESCE(b.telegram_chat_id, u.telegram_chat_id) as telegram_chat_id, u.name as owner_name, u.telegram_username
+      FROM businesses b
+      LEFT JOIN users u ON b.owner_id = u.id
+      WHERE (b.telegram_chat_id IS NOT NULL AND b.telegram_chat_id != '')
+         OR (u.telegram_chat_id IS NOT NULL AND u.telegram_chat_id != '')
+      ORDER BY b.name ASC
+    `).all();
+    return res.json(list);
+  } else {
+    const list = db.prepare(`
+      SELECT id, name, phone, email, telegram_chat_id, telegram_username
+      FROM users
+      WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id != '' AND role = 'CUSTOMER'
+      ORDER BY name ASC
+    `).all();
+    return res.json(list);
+  }
+});
+
+// Admin: Broadcast & Direct Message Dispatcher
+app.post('/api/admin/telegram/broadcast', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'FOUNDER']), async (req, res) => {
+  const { target, target_id, chat_id, message, title, template_type, idempotency_key } = req.body;
+  if (!message || !message.trim()) {
+    return res.status(400).json({ error: 'Xabar matni kiritilishi shart' });
+  }
+
+  // Idempotency check (within last 30 seconds)
+  if (idempotency_key) {
+    const recent = db.prepare(`
+      SELECT id FROM telegram_logs 
+      WHERE error_details = ? AND created_at >= datetime('now', '-30 seconds')
+    `).get(`idempotency:${idempotency_key}`);
+    if (recent) {
+      return res.status(409).json({ error: 'Ushbu xabar hozirgina yuborildi (takroriy so‘rov oldi olindi)' });
+    }
+  }
+
+  let recipients: { chatId: string; id: string; name: string; type: 'CUSTOMER' | 'BUSINESS' }[] = [];
+
+  if (target === 'single_customer') {
+    let row: any;
+    if (chat_id) {
+      row = { telegram_chat_id: chat_id, id: target_id || 'manual', name: 'Mijoz' };
+    } else if (target_id) {
+      row = db.prepare('SELECT id, name, telegram_chat_id FROM users WHERE id = ?').get(target_id);
+    }
+    if (row && row.telegram_chat_id) {
+      recipients.push({ chatId: row.telegram_chat_id, id: row.id, name: row.name || 'Mijoz', type: 'CUSTOMER' });
+    }
+  } else if (target === 'single_business') {
+    let row: any;
+    if (chat_id) {
+      row = { telegram_chat_id: chat_id, id: target_id || 'manual', name: 'Biznes' };
+    } else if (target_id) {
+      row = db.prepare(`
+        SELECT b.id, b.name, COALESCE(b.telegram_chat_id, u.telegram_chat_id) as telegram_chat_id
+        FROM businesses b
+        LEFT JOIN users u ON b.owner_id = u.id
+        WHERE b.id = ?
+      `).get(target_id);
+    }
+    if (row && row.telegram_chat_id) {
+      recipients.push({ chatId: row.telegram_chat_id, id: row.id, name: row.name || 'Biznes', type: 'BUSINESS' });
+    }
+  } else if (target === 'all_customers') {
+    const rows = db.prepare(`
+      SELECT DISTINCT id, name, telegram_chat_id 
+      FROM users 
+      WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id != '' AND role = 'CUSTOMER'
+    `).all() as any[];
+    recipients = rows.map(r => ({ chatId: r.telegram_chat_id, id: r.id, name: r.name || 'Mijoz', type: 'CUSTOMER' }));
+  } else if (target === 'all_businesses') {
+    const rows = db.prepare(`
+      SELECT DISTINCT b.id, b.name, COALESCE(b.telegram_chat_id, u.telegram_chat_id) as telegram_chat_id
+      FROM businesses b
+      LEFT JOIN users u ON b.owner_id = u.id
+      WHERE (b.telegram_chat_id IS NOT NULL AND b.telegram_chat_id != '')
+         OR (u.telegram_chat_id IS NOT NULL AND u.telegram_chat_id != '')
+    `).all() as any[];
+    recipients = rows.map(r => ({ chatId: r.telegram_chat_id, id: r.id, name: r.name || 'Biznes', type: 'BUSINESS' }));
+  }
+
+  if (recipients.length === 0) {
+    return res.status(400).json({ error: 'Xabar yuborish uchun faol Telegram foydalanuvchisi topilmadi' });
+  }
+
+  let sent = 0;
+  let failed = 0;
+  let blocked = 0;
+  const results: any[] = [];
+
+  for (const r of recipients) {
+    let isOk = false;
+    let errDesc = '';
+    let isBlocked = false;
+
+    if (r.type === 'BUSINESS') {
+      const resSend = await sendBusinessBotMessage(r.chatId, message);
+      isOk = Boolean(resSend?.ok);
+      errDesc = resSend?.description || '';
+      isBlocked = errDesc.toLowerCase().includes('blocked') || errDesc.toLowerCase().includes('deactivated');
+    } else {
+      const resSend = await sendTelegramAlert({
+        chatId: r.chatId,
+        message,
+        recipientType: 'CUSTOMER',
+        recipientId: r.id
+      });
+      isOk = resSend.success;
+      errDesc = resSend.error || '';
+      isBlocked = errDesc.toLowerCase().includes('blocked') || errDesc.toLowerCase().includes('deactivated');
+    }
+
+    if (isOk) {
+      sent++;
+    } else if (isBlocked) {
+      blocked++;
+    } else {
+      failed++;
+    }
+
+    const logStatus = isOk ? 'SENT' : (isBlocked ? 'BLOCKED' : 'FAILED');
+    db.prepare(`
+      INSERT INTO telegram_logs (id, recipient_type, recipient_id, chat_id, message, status, error_details)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('tg-' + crypto.randomUUID().slice(0, 10), r.type, r.id, r.chatId, message, logStatus, errDesc || (idempotency_key ? `idempotency:${idempotency_key}` : null));
+    results.push({ id: r.id, chatId: r.chatId, status: logStatus, error: errDesc });
+
+    // Rate-limit throttle (40ms)
+    if (recipients.length > 1) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+  }
+
+  const adminUser = (req as any).user;
+  logAudit(adminUser.id, adminUser.email, 'TELEGRAM_BROADCAST', 'SYSTEM', target, `Yuborildi: ${sent}, Xato: ${failed}, Bloklagan: ${blocked}`);
+
+  res.json({
+    success: true,
+    total: recipients.length,
+    sent,
+    failed,
+    blocked,
+    results
+  });
 });
 
 // Admin: System Health & Diagnostics
@@ -13892,10 +14144,11 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
     const candidatePaths = [
       path.join(process.cwd(), 'dist'),
-      path.join(__dirname, 'dist'),
-      __dirname,
+      path.join(currentDir, 'dist'),
+      currentDir,
     ];
     let distPath = path.join(process.cwd(), 'dist');
     for (const p of candidatePaths) {

@@ -73,8 +73,11 @@ export const api = {
   login: (body: any) => request<any>('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   loginWithTelegramWebApp: (data: { initData: string; user?: any }) =>
     request<{ user: any; token: string }>('/api/auth/telegram-webapp', { method: 'POST', body: JSON.stringify(data) }),
-  createTelegramAuthSession: () =>
-    request<{ sessionId: string; code: string; botUsername: string; botUrl: string; deepLink: string; tgDirect: string; expiresAt: string }>('/api/auth/telegram-session', { method: 'POST' }),
+  createTelegramAuthSession: (botType?: 'customer' | 'business') =>
+    request<{ sessionId: string; code: string; botUsername: string; botUrl: string; deepLink: string; tgDirect: string; expiresAt: string; botType?: string }>(
+      '/api/auth/telegram-session',
+      { method: 'POST', body: JSON.stringify({ bot_type: botType || 'customer' }) }
+    ),
   checkTelegramAuthSession: (sessionId: string) =>
     request<{ status: 'PENDING' | 'CONFIRMED' | 'EXPIRED'; token?: string; user?: any }>(`/api/auth/telegram-session/${sessionId}`),
   consumeTelegramAuthSession: (sessionId: string) =>
@@ -83,6 +86,7 @@ export const api = {
     request<{ success: boolean; token: string; user: any; message: string }>('/api/auth/telegram-quick-login', { method: 'POST', body: JSON.stringify(data) }),
   logout: () => request<any>('/api/auth/logout', { method: 'POST' }),
   getMe: () => request<{ user: any }>('/api/auth/me'),
+  getCurrentUser: () => request<{ user: any }>('/api/auth/me'),
 
   // Public Marketplace
   getCategories: () => request<any[]>('/api/categories'),
@@ -376,6 +380,22 @@ export const api = {
   getAdminTelegramLogs: () => request<any[]>('/api/admin/telegram-logs'),
   sendAdminTelegram: (data: { chat_id: string; message: string }) =>
     request<any>('/api/admin/telegram/send', { method: 'POST', body: JSON.stringify(data) }),
+  getAdminTelegramRecipientsCount: () =>
+    request<{ customersCount: number; businessesCount: number; totalCount: number }>('/api/admin/telegram/recipients-count'),
+  getAdminTelegramRecipients: (type: 'customer' | 'business') =>
+    request<any[]>(`/api/admin/telegram/recipients?type=${type}`),
+  sendAdminTelegramBroadcast: (data: {
+    target: 'single_customer' | 'single_business' | 'all_customers' | 'all_businesses';
+    target_id?: string;
+    chat_id?: string;
+    template_type?: string;
+    title?: string;
+    message: string;
+    idempotency_key?: string;
+  }) => request<{ success: boolean; total: number; sent: number; failed: number; blocked: number; results?: any[] }>(
+    '/api/admin/telegram/broadcast',
+    { method: 'POST', body: JSON.stringify(data) }
+  ),
   getAdminSystemHealth: () => request<any>('/api/admin/system-health'),
   getAdminUsers: () => request<any[]>('/api/admin/users'),
   createAdminUser: (data: { name: string; email: string; phone?: string; password: string; role?: string }) =>

@@ -25,6 +25,7 @@ export interface TelegramUserAuthInfo {
 export interface BusinessBotHooks {
   broadcastQueueUpdate?: (businessId: string, payload: any) => void;
   notifyQueueCalled?: (entryId: string) => Promise<any>;
+  authenticateTelegramUser?: (tgId: string | null, info: { first_name?: string; last_name?: string; username?: string; phone?: string; name?: string }) => { token: string; user: any };
 }
 
 let botHooks: BusinessBotHooks = {};
@@ -33,8 +34,50 @@ export function setBusinessBotHooks(hooks: Partial<BusinessBotHooks>) {
   botHooks = { ...botHooks, ...hooks };
 }
 
+export function parseSessionExpiryDate(expiresAt: any): Date {
+  if (!expiresAt) return new Date(0);
+  if (expiresAt instanceof Date) return expiresAt;
+  let str = String(expiresAt).trim();
+  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('T')) {
+    str = str.replace(' ', 'T') + 'Z';
+  }
+  return new Date(str);
+}
+
 export function getBusinessBotHooks(): BusinessBotHooks {
   return botHooks;
+}
+
+export function getBusinessPlatformAppUrl(db?: DatabaseSync): string {
+  let custom = process.env.APP_URL;
+  if (db) {
+    try {
+      const row = db.prepare("SELECT value FROM platform_settings WHERE key = 'app_url'").get() as any;
+      if (row?.value) custom = row.value;
+    } catch (e) {}
+  }
+  if (custom && custom.trim().length > 0 && !custom.includes('localhost')) {
+    return custom.trim().replace(/\/+$/, '');
+  }
+  return 'https://ais-dev-ntqw6q5d5cy44rj34kkb3h-433562582375.asia-southeast1.run.app';
+}
+
+export function fallbackAuthenticateTelegramUser(db: DatabaseSync, tgId: string, from?: any): { token: string; user: any } {
+  let user: any = db.prepare('SELECT * FROM users WHERE telegram_chat_id = ? OR telegram_user_id = ?').get(tgId, tgId);
+  if (!user) {
+    const userId = 'usr-tg-' + tgId;
+    const fullName = [from?.first_name, from?.last_name].filter(Boolean).join(' ') || (from?.username ? `@${from.username}` : 'Telegram Foydalanuvchi');
+    const email = `tg_${tgId}@navbatbor.uz`;
+    const passwordHash = 'tg_auth_synthetic_hash';
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, role, status, telegram_chat_id, telegram_user_id, telegram_username, telegram_first_name)
+      VALUES (?, ?, ?, ?, 'CUSTOMER', 'ACTIVE', ?, ?, ?, ?)
+    `).run(userId, fullName, email, passwordHash, tgId, tgId, from?.username || null, from?.first_name || null);
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  }
+  const token = 'tok-' + crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
+  return { token, user };
 }
 
 // ========================================================
@@ -45,7 +88,7 @@ export function getBusinessBotToken(): string {
 }
 
 export function getBusinessBotUsername(): string {
-  return process.env.BUSINESS_BOT_USERNAME || 'NavbatBorBusinessBot';
+  return process.env.BUSINESS_BOT_USERNAME || 'navbatbor_bizness_bot';
 }
 
 export function getSuperAdminTelegramIds(): string[] {
@@ -1394,8 +1437,152 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     return;
   }
 
+  // 3b. Web Browser Auth / Session Confirmation Deep Link (/start auth_xxx, /start reg_xxx, /start login_xxx)
+  if (text.startsWith('/start auth_') || text.startsWith('/start reg_') || text.startsWith('/start login_')) {
+    const sessionId = text.replace('/start ', '').trim();
+    const session = db.prepare('SELECT * FROM telegram_auth_sessions WHERE id = ?').get(sessionId) as any;
+
+    if (!session) {
+      await sendBusinessBotMessage(
+        chatId,
+        `⚠️ <b>Sessiya topilmadi</b>\nKirish yoki tasdiqlash havolasi eskirgan yoki xato. Iltimos, saytga qaytib yangi havola oling.`
+      );
+      return;
+    }
+
+    if (session.status === 'EXPIRED' || parseSessionExpiryDate(session.expires_at) < new Date()) {
+      db.prepare("UPDATE telegram_auth_sessions SET status = 'EXPIRED' WHERE id = ?").run(sessionId);
+      await sendBusinessBotMessage(
+        chatId,
+        `⏳ <b>Havola muddati tugagan</b>\nUshbu tasdiqlash sessiyasi 5 daqiqadan ko‘proq vaqt oldin yaratilgan. Iltimos, saytga qaytib «Qayta urinish» tugmasini bosing.`
+      );
+      return;
+    }
+
+    if (session.status === 'CONFIRMED') {
+      await sendBusinessBotMessage(
+        chatId,
+        `ℹ️ <b>Ushbu sessiya allaqachon tasdiqlangan</b>\nSaytdagi brauzeringizga qaytib xizmatlardan foydalanishingiz mumkin.`
+      );
+      return;
+    }
+
+    const hooks = getBusinessBotHooks();
+    const { token, user } = hooks.authenticateTelegramUser
+      ? hooks.authenticateTelegramUser(chatId, {
+          first_name: msg.from?.first_name,
+          last_name: msg.from?.last_name,
+          username: msg.from?.username
+        })
+      : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
+
+    // Link Telegram account to business or business_applications if matched
+    try {
+      if (user?.id) {
+        db.prepare(`
+          UPDATE businesses 
+          SET telegram_chat_id = COALESCE(telegram_chat_id, ?),
+              telegram_user_id = COALESCE(telegram_user_id, ?)
+          WHERE owner_id = ?
+        `).run(chatId, tgUserId, user.id);
+
+          db.prepare(`
+            UPDATE business_applications 
+            SET telegram_chat_id = COALESCE(telegram_chat_id, ?),
+                telegram_user_id = COALESCE(telegram_user_id, ?)
+            WHERE owner_phone = ? OR created_business_id IN (SELECT id FROM businesses WHERE owner_id = ?)
+          `).run(chatId, tgUserId, user.phone || '', user.id);
+      }
+    } catch (e) {}
+
+    db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
+      .run(user.id, token, sessionId);
+
+    const appUrl = getBusinessPlatformAppUrl(db);
+    await sendBusinessBotMessage(
+      chatId,
+      `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSiz NavbatBor Biznes platformasiga Telegram (@${getBusinessBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
+      {
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: '🌐 Saytga o‘tish', url: appUrl }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  // 3c. 6-digit confirmation code verification
+  if (/^\d{6}$/.test(text.trim())) {
+    const code = text.trim();
+    const session = db.prepare('SELECT * FROM telegram_auth_sessions WHERE code = ?').get(code) as any;
+    if (session) {
+      if (session.status === 'EXPIRED' || parseSessionExpiryDate(session.expires_at) < new Date()) {
+        db.prepare("UPDATE telegram_auth_sessions SET status = 'EXPIRED' WHERE id = ?").run(session.id);
+        await sendBusinessBotMessage(
+          chatId,
+          `⏳ <b>Kiritilgan kod muddati tugagan</b>\nIltimos, saytdan yangi tasdiqlash kodi oling.`
+        );
+        return;
+      }
+
+      if (session.status === 'CONFIRMED') {
+        await sendBusinessBotMessage(
+          chatId,
+          `ℹ️ <b>Ushbu kod allaqachon tasdiqlangan</b>\nBrauzerdagi sahifangizga qaytib xizmatlardan foydalanishingiz mumkin.`
+        );
+        return;
+      }
+
+      const hooks = getBusinessBotHooks();
+      const { token, user } = hooks.authenticateTelegramUser
+        ? hooks.authenticateTelegramUser(chatId, {
+            first_name: msg.from?.first_name,
+            last_name: msg.from?.last_name,
+            username: msg.from?.username
+          })
+        : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
+
+      try {
+        if (user?.id) {
+          db.prepare(`
+            UPDATE businesses 
+            SET telegram_chat_id = COALESCE(telegram_chat_id, ?),
+                telegram_user_id = COALESCE(telegram_user_id, ?)
+            WHERE owner_id = ?
+          `).run(chatId, tgUserId, user.id);
+
+          db.prepare(`
+            UPDATE business_applications 
+            SET telegram_chat_id = COALESCE(telegram_chat_id, ?),
+                telegram_user_id = COALESCE(telegram_user_id, ?)
+            WHERE owner_phone = ? OR created_business_id IN (SELECT id FROM businesses WHERE owner_id = ?)
+          `).run(chatId, tgUserId, user.phone || '', user.id);
+        }
+      } catch (e) {}
+
+      db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
+        .run(user.id, token, session.id);
+
+      const appUrl = getBusinessPlatformAppUrl(db);
+      await sendBusinessBotMessage(
+        chatId,
+        `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib biznesingizni boshqarishingiz mumkin.`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🌐 Saytga o‘tish', url: appUrl }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+  }
+
   // 4. /start command
-  if (text === '/start' || text === '/menu') {
+  if (text === '/start' || text.startsWith('/start@') || text === '/menu' || text === '/start help') {
     clearBotUserState(db, chatId);
 
     if (auth.role === 'SUPER_ADMIN') {
@@ -2128,7 +2315,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
   }
 
   // Fallback for unauthenticated access to buttons
-  if (!['/start', '/help'].includes(text)) {
+  if (!['/start', '/help', '/menu'].includes(text) && !text.startsWith('/start@')) {
     await sendBusinessBotMessage(chatId, t(lang, 'unauthorized'), {
       replyMarkup: getGuestKeyboard(lang, auth.role === 'PENDING_APPLICANT')
     });
@@ -2642,14 +2829,24 @@ export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
   const pollLoop = async () => {
     while (isBusinessPollingActive) {
       try {
-        const resp = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${businessUpdateOffset}&timeout=25&allowed_updates=["message","callback_query"]`);
+        const resp = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${businessUpdateOffset}&timeout=25&allowed_updates=["message","callback_query"]`, {
+          signal: AbortSignal.timeout(35000)
+        });
+        if (!resp.ok) {
+          console.error(`[Business Bot Poller] HTTP ${resp.status}`);
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
         const data = await resp.json() as any;
 
         if (data.ok && Array.isArray(data.result)) {
           for (const update of data.result) {
-            businessUpdateOffset = update.update_id + 1;
+            businessUpdateOffset = Math.max(businessUpdateOffset, update.update_id + 1);
             await processBusinessBotUpdate(update, db);
           }
+        } else if (!data.ok) {
+          console.error('[Business Bot Poller] Telegram API error:', data.error_code, data.description);
+          await new Promise(r => setTimeout(r, 3000));
         }
       } catch (err: any) {
         // Sleep on error to prevent spinning

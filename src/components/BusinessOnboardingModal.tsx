@@ -56,10 +56,32 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
     { name: 'Asosiy xizmat / Konsultatsiya', duration_minutes: 30, price_uzs: 50000, description: '' }
   ]);
 
-  // Account creation for unauthenticated user
+  // Account creation for unauthenticated or unverified user
+  const [verifiedUser, setVerifiedUser] = useState<User | null>(currentUser);
   const [ownerName, setOwnerName] = useState<string>(currentUser?.name || '');
   const [ownerEmail, setOwnerEmail] = useState<string>(currentUser?.email || '');
   const [ownerPassword, setOwnerPassword] = useState<string>('');
+
+  React.useEffect(() => {
+    let isMounted = true;
+    api.getCurrentUser()
+      .then((res: any) => {
+        if (isMounted) {
+          if (res?.user) {
+            setVerifiedUser(res.user);
+            setOwnerName(prev => prev || res.user.name || '');
+            setOwnerEmail(prev => prev || res.user.email || '');
+            setPhone(prev => (prev === '+998' || !prev) ? (res.user.phone || '+998') : prev);
+          } else {
+            setVerifiedUser(null);
+          }
+        }
+      })
+      .catch(() => {
+        if (isMounted) setVerifiedUser(null);
+      });
+    return () => { isMounted = false; };
+  }, []);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +131,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
       return;
     }
 
-    if (!currentUser) {
+    if (!verifiedUser) {
       if (!ownerName.trim()) {
         setError('Biznes egasi ism-familiyasini kiriting');
         return;
@@ -510,8 +532,36 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
                 </div>
               </div>
 
-              {/* 5. Biznes egasi akkaunti (faqat agar tizimga kirmagan bo'lsa) */}
-              {!currentUser && (
+              {/* 5. Biznes egasi akkaunti */}
+              {verifiedUser ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs shrink-0">
+                      ✓
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-emerald-950">
+                        {verifiedUser.name} ({verifiedUser.email})
+                      </div>
+                      <div className="text-[11px] text-emerald-700">
+                        Ushbu hisobingiz biznes egasi roliga biriktiriladi
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerifiedUser(null);
+                      setOwnerName('');
+                      setOwnerEmail('');
+                      setOwnerPassword('');
+                    }}
+                    className="text-[11px] text-emerald-800 hover:text-emerald-950 font-bold underline cursor-pointer shrink-0"
+                  >
+                    Boshqa hisob kiritish
+                  </button>
+                </div>
+              ) : (
                 <div className="space-y-3 pt-2 bg-indigo-50/60 border border-indigo-100 rounded-2xl p-4">
                   <h4 className="font-black text-indigo-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                     <UserIcon className="w-3.5 h-3.5 text-indigo-600" />

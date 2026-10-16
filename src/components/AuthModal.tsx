@@ -10,15 +10,18 @@ interface AuthModalProps {
   initialMode?: 'login' | 'register';
   onClose: () => void;
   onSuccess: (user: UserType) => void;
+  botType?: 'customer' | 'business';
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'login',
   onClose,
   onSuccess,
+  botType = 'customer',
 }) => {
   const { t } = useTranslation();
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+  const [activeBotType, setActiveBotType] = useState<'customer' | 'business'>(botType);
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [name, setName] = useState<string>('');
@@ -80,17 +83,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Start Telegram Browser Quick Login / Registration session
-  const startTelegramBrowserLogin = async () => {
+  const startTelegramBrowserLogin = async (targetBotType?: 'customer' | 'business') => {
+    const selectedBot = targetBotType || activeBotType;
+    if (targetBotType) setActiveBotType(targetBotType);
     setTgLoading(true);
     setError(null);
     setShowTgView(true);
     setVerificationStatus('WAITING');
-    setCountdown(180); // 3 minutes timeout
+    setCountdown(300); // 5 minutes timeout matching backend
     setBotOpened(false);
 
     try {
-      const session = await api.createTelegramAuthSession();
+      const session = await api.createTelegramAuthSession(selectedBot);
       setTgSession(session);
+
+      if (session.expiresAt) {
+        const diffSec = Math.max(10, Math.round((new Date(session.expiresAt).getTime() - Date.now()) / 1000));
+        setCountdown(diffSec);
+      }
 
       // Start countdown
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -243,11 +253,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <Send className="w-7 h-7 fill-[#2AABEE]" />
               </div>
 
+              {/* Bot Mode Selector Toggle */}
+              <div className="inline-flex items-center gap-1 p-1 bg-sky-100/70 border border-sky-200/80 rounded-xl mb-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => startTelegramBrowserLogin('customer')}
+                  className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${activeBotType === 'customer' ? 'bg-white text-sky-700 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  👤 Mijozlar boti
+                </button>
+                <button
+                  type="button"
+                  onClick={() => startTelegramBrowserLogin('business')}
+                  className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${activeBotType === 'business' ? 'bg-white text-sky-700 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  🏢 Biznes boti
+                </button>
+              </div>
+
               <h4 className="text-sm font-bold text-slate-900 mb-1">
-                {mode === 'register' ? 'Telegram boti orqali ro‘yxatdan o‘ting' : 'Telegram botingiz orqali tasdiqlang'}
+                {activeBotType === 'business'
+                  ? 'NavbatBor Biznes boti orqali tasdiqlash'
+                  : mode === 'register' ? 'Telegram boti orqali ro‘yxatdan o‘ting' : 'Telegram botingiz orqali tasdiqlang'}
               </h4>
               <p className="text-xs text-slate-600 mb-3.5">
-                Pastdagi tugmani bosing va <b>@{tgSession?.botUsername || 'Navbat1Uzb_bot'}</b> da <b>START</b> tugmasini bosing
+                Pastdagi tugmani bosing va <b>@{tgSession?.botUsername || (activeBotType === 'business' ? 'navbatbor_bizness_bot' : 'Navbat1Uzb_bot')}</b> da <b>START</b> tugmasini bosing
               </p>
 
               {tgSession && (
@@ -314,7 +344,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                     <button
                       type="button"
-                      onClick={startTelegramBrowserLogin}
+                      onClick={() => startTelegramBrowserLogin(activeBotType)}
                       className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
                     >
                       🔄 Qayta urinish
@@ -396,7 +426,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <button
                   type="button"
                   id="tg-web-login-btn"
-                  onClick={startTelegramBrowserLogin}
+                  onClick={() => startTelegramBrowserLogin()}
                   disabled={tgLoading}
                   className="w-full py-3.5 px-4 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] hover:from-[#229ED9] hover:to-[#1a89bf] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2.5 shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
                 >

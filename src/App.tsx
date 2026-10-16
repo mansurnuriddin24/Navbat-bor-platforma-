@@ -89,6 +89,7 @@ export default function App() {
   // Modals state
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authInitialMode, setAuthInitialMode] = useState<'login' | 'register'>('login');
+  const [authModalBotType, setAuthModalBotType] = useState<'customer' | 'business'>('customer');
   const [onboardModalOpen, setOnboardModalOpen] = useState<boolean>(false);
   const [legalModalType, setLegalModalType] = useState<'privacy' | 'terms' | 'support' | null>(null);
   const [qrModalBusiness, setQrModalBusiness] = useState<BusinessItem | null>(null);
@@ -854,10 +855,15 @@ export default function App() {
       {authModalOpen && (
         <AuthModal
           initialMode={authInitialMode}
-          onClose={() => setAuthModalOpen(false)}
+          botType={authModalBotType}
+          onClose={() => {
+            setAuthModalOpen(false);
+            setAuthModalBotType('customer');
+          }}
           onSuccess={(u) => {
             setCurrentUser(u);
             setAuthModalOpen(false);
+            setAuthModalBotType('customer');
             if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
             else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') setActiveView('operating-partner');
             else if (u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
@@ -881,6 +887,7 @@ export default function App() {
           onOpenAuth={() => {
             setOnboardModalOpen(false);
             setAuthInitialMode('register');
+            setAuthModalBotType('business');
             setAuthModalOpen(true);
           }}
         />

@@ -99,6 +99,10 @@ export const api = {
     request<{ success: boolean }>(`/api/auth/telegram-session/${sessionId}/consume`, { method: 'POST' }),
   quickTelegramLogin: (data: { phone?: string; name?: string; username?: string; sessionId?: string; code?: string }) =>
     request<{ success: boolean; token: string; user: any; message: string }>('/api/auth/telegram-quick-login', { method: 'POST', body: JSON.stringify(data) }),
+  getGoogleAuthConfig: () =>
+    request<{ clientId: string; enabled: boolean; redirectUri: string }>('/api/auth/google/config'),
+  loginWithGoogleCredential: (credential: string) =>
+    request<{ token: string; user: any }>('/api/auth/google', { method: 'POST', body: JSON.stringify({ credential }) }),
   logout: () => request<any>('/api/auth/logout', { method: 'POST' }),
   getMe: () => request<{ user: any }>('/api/auth/me'),
   getCurrentUser: () => request<{ user: any }>('/api/auth/me'),

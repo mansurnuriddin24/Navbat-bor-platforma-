@@ -41,6 +41,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
   const animationFrameRef = useRef<number | null>(null);
   const isScanningRef = useRef<boolean>(false);
   const lastScannedCodeRef = useRef<string | null>(null);
+  const permissionTimeoutRef = useRef<any>(null);
 
   // States
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle');
@@ -85,6 +86,10 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
 
   // Stop camera tracks cleanly
   const stopCamera = () => {
+    if (permissionTimeoutRef.current) {
+      clearTimeout(permissionTimeoutRef.current);
+      permissionTimeoutRef.current = null;
+    }
     isScanningRef.current = false;
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -108,13 +113,33 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
   const startCamera = async () => {
     stopCamera();
     setErrorMessage(null);
-    setCameraStatus('requesting');
 
-    // 1. Check browser mediaDevices support
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // 1. Check HTTPS / Secure Context (Requirement 3: camera only over HTTPS or localhost)
+    if (typeof window !== 'undefined' && window.isSecureContext === false && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
       setCameraStatus('unsupported');
+      setErrorMessage('Kamera xavfsizlik talablariga ko‘ra faqat HTTPS (shifrlangan aloqa) orqali ishlaydi. Iltimos, QR-kod rasmini galereyadan tanlang yoki kodni qo‘lda kiriting.');
       return;
     }
+
+    // 2. Check browser mediaDevices support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraStatus('unsupported');
+      setErrorMessage('Qurilmangizda kamera imkoniyati topilmadi. QR-kod rasmini tanlang yoki kodni qo‘lda kiriting.');
+      return;
+    }
+
+    setCameraStatus('requesting');
+
+    // 3. Permission timeout guard (prevents infinite loading if prompt is delayed or ignored)
+    permissionTimeoutRef.current = setTimeout(() => {
+      setCameraStatus((current) => {
+        if (current === 'requesting') {
+          setErrorMessage('Kameraga ulanish kutilganidan ko‘proq vaqt oldi. Iltimos, qayta urinib ko‘ring yoki rasmni galereyadan tanlang.');
+          return 'denied';
+        }
+        return current;
+      });
+    }, 8000);
 
     try {
       const constraints: MediaStreamConstraints = {
@@ -127,6 +152,12 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      if (permissionTimeoutRef.current) {
+        clearTimeout(permissionTimeoutRef.current);
+        permissionTimeoutRef.current = null;
+      }
+
       streamRef.current = stream;
 
       // Check torch capability
@@ -146,9 +177,14 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         startScanningLoop();
       }
     } catch (err: any) {
+      if (permissionTimeoutRef.current) {
+        clearTimeout(permissionTimeoutRef.current);
+        permissionTimeoutRef.current = null;
+      }
       console.warn('Camera request error:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraStatus('denied');
+        setErrorMessage('Kameraga ruxsat berilmadi yoki bekor qilindi. Brauzer sozlamalaridan ruxsat bering va qayta urinib ko‘ring.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         setCameraStatus('error');
         setErrorMessage('Qurilmada kamera topilmadi.');
@@ -387,7 +423,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center items-center bg-black/80 backdrop-blur-sm animate-fadeIn p-0 sm:p-4"
+      className="fixed inset-0 z-[70] flex flex-col justify-end sm:justify-center items-center bg-black/80 backdrop-blur-sm animate-fadeIn p-0 sm:p-4"
       aria-modal="true"
       role="dialog"
     >
@@ -401,7 +437,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         className="hidden"
       />
 
-      <div className="relative w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="relative w-full max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] sm:max-h-[90vh]">
         {/* Mobile Drag Indicator */}
         <div className="sm:hidden w-12 h-1 bg-slate-300 rounded-full mx-auto mt-2.5 mb-1 shrink-0" />
 
@@ -432,7 +468,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 pb-[max(env(safe-area-inset-bottom),1.5rem)]">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 pb-[max(env(safe-area-inset-bottom),2rem)]">
           {/* STATE 1: RESOLVING SCANNED CODE */}
           {resolving && (
             <div className="py-12 text-center space-y-3">

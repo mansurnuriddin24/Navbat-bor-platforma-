@@ -103,6 +103,21 @@ export default function App() {
 
   // Initial Load: User, Categories, Cities
   useEffect(() => {
+    // Check if redirected from Google OAuth or external auth callback
+    const searchParams = new URLSearchParams(window.location.search);
+    const googleToken = searchParams.get('google_token');
+    const authError = searchParams.get('auth_error');
+
+    if (googleToken) {
+      setStoredToken(googleToken);
+      const cleanUrl = window.location.pathname + (window.location.hash || '');
+      window.history.replaceState({}, document.title, cleanUrl);
+    } else if (authError) {
+      alert(`Kirishda xatolik: ${authError}`);
+      const cleanUrl = window.location.pathname + (window.location.hash || '');
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+
     // Check current auth
     api
       .getMe()

@@ -1888,7 +1888,7 @@ function seedDatabase() {
   // 4. Initial Core Admin & Team Users
   const users = [
     { id: 'usr-admin-jahongir', name: 'Jahongir Rasulov', email: 'rasulovjahongir074@gmail.com', phone: '+998901234567', pass: 'admin123', role: 'FOUNDER' },
-    { id: 'usr-admin', name: 'Super Admin', email: 'admin@navbatbor.uz', phone: '+998752210000', pass: 'admin123', role: 'ADMIN' },
+    { id: 'usr-admin', name: 'Super Admin', email: 'mansurnuriddinov24@gmail.com', phone: '+998200232540', pass: 'Mansur1105.', role: 'ADMIN' },
     { id: 'usr-operating-partner-qarshi', name: 'Alisher Qodirov (Qarshi Boshqaruvchi)', email: 'partner@navbatbor.uz', phone: '+998971234567', pass: 'partner123', role: 'OPERATING_PARTNER' },
     { id: 'usr-sales-manager-1', name: 'Bobur Mirzayev (Sotuv Menejeri)', email: 'sales@navbatbor.uz', phone: '+998901112233', pass: 'sales123', role: 'SALES_MANAGER' },
     { id: 'usr-support-1', name: 'Texnik Qo‘llab-quvvatlash Markazi', email: 'support-desk@navbatbor.uz', phone: '+998200232540', pass: 'support123', role: 'SUPPORT' },

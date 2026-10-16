@@ -71,13 +71,28 @@ export const api = {
   // Auth
   register: (body: any) => request<any>('/api/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   login: (body: any) => request<any>('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
-  loginWithTelegramWebApp: (data: { initData: string; user?: any }) =>
-    request<{ user: any; token: string }>('/api/auth/telegram-webapp', { method: 'POST', body: JSON.stringify(data) }),
-  createTelegramAuthSession: (botType?: 'customer' | 'business') =>
-    request<{ sessionId: string; code: string; botUsername: string; botUrl: string; deepLink: string; tgDirect: string; expiresAt: string; botType?: string }>(
+  loginWithTelegramWebApp: (data: { initData: string; user?: any }) => {
+    const cleanUser = data.user ? {
+      id: data.user.id,
+      first_name: data.user.first_name,
+      last_name: data.user.last_name,
+      username: data.user.username,
+      language_code: data.user.language_code
+    } : undefined;
+    return request<{ user: any; token: string }>('/api/auth/telegram-webapp', {
+      method: 'POST',
+      body: JSON.stringify({ initData: data.initData, user: cleanUser })
+    });
+  },
+  createTelegramAuthSession: (botType?: 'customer' | 'business') => {
+    const validBotType = typeof botType === 'string' && (botType === 'business' || botType === 'customer')
+      ? botType
+      : 'customer';
+    return request<{ sessionId: string; code: string; botUsername: string; botUrl: string; deepLink: string; tgDirect: string; expiresAt: string; botType?: string }>(
       '/api/auth/telegram-session',
-      { method: 'POST', body: JSON.stringify({ bot_type: botType || 'customer' }) }
-    ),
+      { method: 'POST', body: JSON.stringify({ bot_type: validBotType }) }
+    );
+  },
   checkTelegramAuthSession: (sessionId: string) =>
     request<{ status: 'PENDING' | 'CONFIRMED' | 'EXPIRED'; token?: string; user?: any }>(`/api/auth/telegram-session/${sessionId}`),
   consumeTelegramAuthSession: (sessionId: string) =>

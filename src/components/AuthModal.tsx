@@ -83,9 +83,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Start Telegram Browser Quick Login / Registration session
-  const startTelegramBrowserLogin = async (targetBotType?: 'customer' | 'business') => {
-    const selectedBot = targetBotType || activeBotType;
-    if (targetBotType) setActiveBotType(targetBotType);
+  const startTelegramBrowserLogin = async (targetBotType?: any) => {
+    const selectedBot: 'customer' | 'business' =
+      targetBotType === 'business' || targetBotType === 'customer'
+        ? targetBotType
+        : activeBotType === 'business'
+        ? 'business'
+        : 'customer';
+    setActiveBotType(selectedBot);
     setTgLoading(true);
     setError(null);
     setShowTgView(true);
@@ -145,7 +150,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }, 1500);
 
     } catch (err: any) {
-      setError(err.message || 'Telegram sessiyasini yaratishda xatolik yuz berdi');
+      const errMsg = typeof err?.message === 'string' ? err.message : 'Telegram sessiyasini yaratishda xatolik yuz berdi';
+      setError(errMsg);
       setVerificationStatus('TIMEOUT');
     } finally {
       setTgLoading(false);

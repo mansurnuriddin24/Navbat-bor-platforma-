@@ -136,8 +136,8 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
         setError('Biznes egasi ism-familiyasini kiriting');
         return;
       }
-      if (!ownerEmail.trim()) {
-        setError('Biznes egasi email manzilini kiriting');
+      if (!ownerEmail.trim() || !ownerEmail.includes('@') || !ownerEmail.includes('.') || ownerEmail.endsWith('.')) {
+        setError('To‘g‘ri email manzilini kiriting (masalan: misol@gmail.com)');
         return;
       }
       if (!ownerPassword || ownerPassword.length < 6) {

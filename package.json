@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
+    "start": "node --experimental-sqlite dist/server.cjs",
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist', {recursive:true,force:true}); if(fs.existsSync('server.js')) fs.unlinkSync('server.js');\"",
     "lint": "tsc --noEmit"

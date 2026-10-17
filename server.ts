@@ -10611,10 +10611,15 @@ setInterval(() => {
 // Keep-alive self-ping for Render free tier to prevent 15-minute container spindown
 setInterval(async () => {
   try {
-    const urlsToPing: string[] = [`http://127.0.0.1:${PORT}/api/health`];
+    const urlsToPing: string[] = [
+      `http://127.0.0.1:${PORT}/api/health`,
+      'https://navbat-bor-platforma-.onrender.com/api/health',
+      'https://navbatbor.uz/api/health'
+    ];
     const extUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
     if (extUrl && extUrl.startsWith('http') && !extUrl.includes('your-domain.com')) {
-      urlsToPing.push(`${extUrl.replace(/\/$/, '')}/api/health`);
+      const formatted = `${extUrl.replace(/\/$/, '')}/api/health`;
+      if (!urlsToPing.includes(formatted)) urlsToPing.push(formatted);
     }
     for (const u of urlsToPing) {
       try {
@@ -10622,7 +10627,7 @@ setInterval(async () => {
       } catch (e) {}
     }
   } catch (err) {}
-}, 9 * 60 * 1000);
+}, 8 * 60 * 1000);
 
 // Start customer bot and business bot polling after boot
 setTimeout(startTelegramPolling, 2000);

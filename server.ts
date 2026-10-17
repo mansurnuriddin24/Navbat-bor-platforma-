@@ -10613,7 +10613,7 @@ setInterval(async () => {
   try {
     const urlsToPing: string[] = [
       `http://127.0.0.1:${PORT}/api/health`,
-      'https://navbat-bor-platforma-.onrender.com/api/health',
+      'https://navbat-bor-platforma.onrender.com/api/health',
       'https://navbatbor.uz/api/health'
     ];
     const extUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;

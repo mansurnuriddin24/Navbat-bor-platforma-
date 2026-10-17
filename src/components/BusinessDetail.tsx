@@ -4,7 +4,7 @@ import {
   ArrowLeft, Calendar, Users, Tv, Megaphone, Navigation, 
   ExternalLink, Send, Share2, ShieldCheck, Sparkles, 
   Award, Zap, CreditCard, Bell, ChevronRight, Check, 
-  Search, Globe, Info, ZoomIn, FileText, CheckSquare, Layers
+  Search, Globe, Info, ZoomIn, FileText, CheckSquare, Layers, Building2
 } from 'lucide-react';
 import { api } from '../api';
 import { Service, StaffMember, BusinessHours, Review, User } from '../types';
@@ -102,51 +102,36 @@ export const BusinessDetail: React.FC<BusinessDetailProps> = ({
   const dayNamesEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dayNames = lang === 'ru' ? dayNamesRu : lang === 'en' ? dayNamesEn : dayNamesUz;
 
-  // Build curated image gallery accommodating rich photos, facilities, and technical infographics
+  // Build image gallery strictly from real photos uploaded by the business owner
   const galleryImages: GalleryItem[] = useMemo(() => {
     if (!data?.business) return [];
     const biz = data.business;
-    const mainImg = biz.logo_url || 'https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?w=1200&auto=format&fit=crop&q=80';
-    const cSlug = (biz.category_slug || '').toLowerCase();
+    const items: GalleryItem[] = [];
 
-    if (cSlug.includes('tibbiyot') || cSlug.includes('medicine')) {
-      return [
-        { url: mainImg, title: "Klinika fasadi va asosiy bino", tag: "Fasad" },
-        { url: 'https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=800&auto=format&fit=crop&q=80', title: 'Diagnostika va shifokor qabul xonasi', tag: 'Qabulxona' },
-        { url: 'https://images.unsplash.com/photo-1579684385127-1ef15d508118?w=800&auto=format&fit=crop&q=80', title: 'Ilg‘or tibbiy diagnostika apparatlari', tag: 'Uskunalar' },
-        { url: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=800&auto=format&fit=crop&q=80', title: 'Sertifikatlangan shifokorlar ko‘rigi', tag: 'Mutaxassislar' },
-        { url: 'https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?w=800&auto=format&fit=crop&q=80', title: 'SanPiN 100% sterilizatsiya va gigiyena kafolati', tag: 'Sterillik' }
-      ];
+    // 1. If business uploaded photos_json (array of image URLs or objects)
+    if ((biz as any).photos_json) {
+      try {
+        const parsed = typeof (biz as any).photos_json === 'string' ? JSON.parse((biz as any).photos_json) : (biz as any).photos_json;
+        if (Array.isArray(parsed)) {
+          for (const p of parsed) {
+            if (typeof p === 'string' && p.trim()) {
+              items.push({ url: p, title: biz.name, tag: 'Foto' });
+            } else if (p && typeof p === 'object' && p.url) {
+              items.push({ url: p.url, title: p.title || biz.name, tag: p.tag || 'Foto' });
+            }
+          }
+        }
+      } catch (e) {}
     }
-    if (cSlug.includes('stomatologiya') || cSlug.includes('dent')) {
-      return [
-        { url: mainImg, title: "Stomatologiya markazi", tag: "Fasad" },
-        { url: 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?w=800&auto=format&fit=crop&q=80', title: 'Muolaja kreslosi va steril kabinet', tag: 'Kabinet' },
-        { url: 'https://images.unsplash.com/photo-1606811841689-23dfddce3e95?w=800&auto=format&fit=crop&q=80', title: 'Raqamli rentgen va tish skaneri', tag: 'Uskunalar' },
-        { url: 'https://images.unsplash.com/photo-1588776814546-1ffcf47267a5?w=800&auto=format&fit=crop&q=80', title: 'Avtoklav va xirurgik gigiyena', tag: 'SanPiN' }
-      ];
+
+    // 2. If business uploaded a logo / main photo
+    if (biz.logo_url && biz.logo_url.trim()) {
+      if (!items.some(it => it.url === biz.logo_url)) {
+        items.unshift({ url: biz.logo_url, title: `${biz.name} — Asosiy foto`, tag: 'Asosiy' });
+      }
     }
-    if (cSlug.includes('avto')) {
-      return [
-        { url: mainImg, title: "Avtoservis bosh ustaxonasi", tag: "Fasad" },
-        { url: 'https://images.unsplash.com/photo-1486006920555-c77dce18193b?w=800&auto=format&fit=crop&q=80', title: 'Kompyuterli diagnostika stendi', tag: 'Diagnostika' },
-        { url: 'https://images.unsplash.com/photo-1619642751034-765dfdf7c58e?w=800&auto=format&fit=crop&q=80', title: 'Moy almashtirish va moylash boksi', tag: 'Texnik xizmat' },
-        { url: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=800&auto=format&fit=crop&q=80', title: 'Professional ustalar zonasi', tag: 'Ustaxona' }
-      ];
-    }
-    if (cSlug.includes('gozallik') || cSlug.includes('barber')) {
-      return [
-        { url: mainImg, title: "Salon ko‘rinishi va interyer", tag: "Interyer" },
-        { url: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=800&auto=format&fit=crop&q=80', title: 'Professional xizmat ko‘rsatish stoli', tag: 'Xizmat zonasi' },
-        { url: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=800&auto=format&fit=crop&q=80', title: 'Premium kosmetika va steril asboblar', tag: 'Sifat' },
-        { url: 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?w=800&auto=format&fit=crop&q=80', title: 'Mijozlar kutish zali', tag: 'Kutish zali' }
-      ];
-    }
-    return [
-      { url: mainImg, title: "Muassasa ko‘rinishi", tag: "Asosiy" },
-      { url: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=800&auto=format&fit=crop&q=80', title: 'Mijozlar qabulxonasi', tag: 'Qabulxona' },
-      { url: 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=800&auto=format&fit=crop&q=80', title: 'Zamonaviy xizmat xonasi', tag: 'Xona' }
-    ];
+
+    return items;
   }, [data?.business]);
 
   // Generate SEO-rich, keyword-targeted bilingual descriptions
@@ -272,17 +257,33 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden p-4 sm:p-6 lg:p-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
-          {/* LEFT: Prominent Multi-Image Gallery with Infographic Tags */}
+          {/* LEFT: Business Photos or Clean Placeholder */}
           <div className="lg:col-span-7 space-y-3.5">
             {/* Primary Main Viewport */}
-            <div className="relative h-72 sm:h-96 w-full rounded-2xl bg-slate-900 overflow-hidden group">
-              <img
-                src={activePhoto.url}
-                alt={activePhoto.title}
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-black/20 pointer-events-none" />
+            <div className="relative h-72 sm:h-96 w-full rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 overflow-hidden group flex items-center justify-center">
+              {activePhoto && activePhoto.url ? (
+                <>
+                  <img
+                    src={activePhoto.url}
+                    alt={activePhoto.title}
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-black/20 pointer-events-none" />
+                </>
+              ) : (
+                <div className="text-center p-6 text-white space-y-3">
+                  <div className="w-20 h-20 mx-auto rounded-3xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+                    <Building2 className="w-10 h-10 text-blue-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white">{business.name}</h3>
+                    <p className="text-xs text-slate-300 mt-1 max-w-sm mx-auto">
+                      Rasmiy muassasa sahifasi. Fotosuratlar biznes egasi kabineti orqali joylashtiriladi.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Top badges on image */}
               <div className="absolute top-3 left-3 flex flex-wrap items-center gap-1.5 z-10">
@@ -304,54 +305,62 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
               </div>
 
               {/* Zoom & Lightbox Trigger */}
-              <button
-                type="button"
-                onClick={() => setIsLightboxOpen(true)}
-                title={t('view_large_photo')}
-                className="absolute top-3 right-3 p-2 bg-slate-900/80 hover:bg-slate-900 text-white rounded-xl backdrop-blur transition cursor-pointer border border-white/20 shadow-md"
-              >
-                <ZoomIn className="w-4 h-4" />
-              </button>
+              {activePhoto && activePhoto.url && (
+                <button
+                  type="button"
+                  onClick={() => setIsLightboxOpen(true)}
+                  title={t('view_large_photo')}
+                  className="absolute top-3 right-3 p-2 bg-slate-900/80 hover:bg-slate-900 text-white rounded-xl backdrop-blur transition cursor-pointer border border-white/20 shadow-md"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+              )}
 
               {/* Bottom Caption & Technical Tag */}
-              <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white z-10">
-                <div className="bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-xs font-medium max-w-[80%] truncate">
-                  <span className="text-blue-400 font-bold mr-1.5">[{activePhoto.tag || 'Foto'}]</span>
-                  <span>{activePhoto.title}</span>
+              {activePhoto && activePhoto.url && (
+                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white z-10">
+                  <div className="bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-xs font-medium max-w-[80%] truncate">
+                    <span className="text-blue-400 font-bold mr-1.5">[{activePhoto.tag || 'Foto'}]</span>
+                    <span>{activePhoto.title}</span>
+                  </div>
+                  {galleryImages.length > 1 && (
+                    <div className="text-[11px] font-mono bg-black/60 px-2 py-1 rounded-lg text-slate-300">
+                      {selectedImageIndex + 1} / {galleryImages.length}
+                    </div>
+                  )}
                 </div>
-                <div className="text-[11px] font-mono bg-black/60 px-2 py-1 rounded-lg text-slate-300">
-                  {selectedImageIndex + 1} / {galleryImages.length}
-                </div>
-              </div>
+              )}
             </div>
 
-            {/* Interactive Thumbnail Carousel Strip */}
-            <div className="grid grid-cols-5 gap-2">
-              {galleryImages.map((img, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setSelectedImageIndex(idx)}
-                  className={`relative h-16 sm:h-20 rounded-xl overflow-hidden border-2 transition cursor-pointer group ${
-                    selectedImageIndex === idx 
-                      ? 'border-blue-600 ring-2 ring-blue-600/30 shadow-md scale-100' 
-                      : 'border-slate-200 hover:border-slate-300 opacity-75 hover:opacity-100'
-                  }`}
-                >
-                  <img
-                    src={img.url}
-                    alt={img.title}
-                    className="w-full h-full object-cover group-hover:scale-110 transition duration-300"
-                    referrerPolicy="no-referrer"
-                  />
-                  {img.tag && (
-                    <span className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-white text-[9px] font-bold text-center py-0.5 truncate px-1">
-                      {img.tag}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
+            {/* Interactive Thumbnail Carousel Strip - ONLY when business has 2+ real photos */}
+            {galleryImages.length > 1 && (
+              <div className="grid grid-cols-5 gap-2">
+                {galleryImages.map((img, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedImageIndex(idx)}
+                    className={`relative h-16 sm:h-20 rounded-xl overflow-hidden border-2 transition cursor-pointer group ${
+                      selectedImageIndex === idx 
+                        ? 'border-blue-600 ring-2 ring-blue-600/30 shadow-md scale-100' 
+                        : 'border-slate-200 hover:border-slate-300 opacity-75 hover:opacity-100'
+                    }`}
+                  >
+                    <img
+                      src={img.url}
+                      alt={img.title}
+                      className="w-full h-full object-cover group-hover:scale-110 transition duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    {img.tag && (
+                      <span className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-white text-[9px] font-bold text-center py-0.5 truncate px-1">
+                        {img.tag}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Technical Infographic Trust Banner */}
             <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl flex items-center justify-between gap-3 text-xs text-slate-700">

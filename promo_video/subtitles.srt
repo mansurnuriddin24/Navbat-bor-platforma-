@@ -1,0 +1,23 @@
+1
+00:00:00,100 --> 00:00:03,400
+Saloningizda mijozlar tiqilinchdan zerikib ketib qolyaptimi?
+
+2
+00:00:03,400 --> 00:00:06,600
+Telefon orqali tinimsiz qo‘ng‘iroqlardan charchadingizmi?
+
+3
+00:00:06,600 --> 00:00:11,100
+NavbatBor — sartaroshxona va salonlar uchun zamonaviy onlayn navbat va bronlash tizimi!
+
+4
+00:00:11,100 --> 00:00:14,400
+QR-kod va Telegram bot orqali 2 daqiqada ishga tushiring.
+
+5
+00:00:14,400 --> 00:00:19,200
+Mijozlar o‘z vaqtida keladi, bo‘sh o‘rinlar to‘ladi va daromadingiz 30% gacha oshadi!
+
+6
+00:00:19,200 --> 00:00:24,900
+Hoziroq 14 kunlik bepul sinovni boshlang: navbatbor.uz saytiga kiring yoki Telegram botimizga ulaning!

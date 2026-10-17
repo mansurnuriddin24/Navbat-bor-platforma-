@@ -392,8 +392,8 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
                   {reviews.length > 0 ? t('reviews_count', { count: reviews.length }) : 'Hozircha yangi muassasa'}
                 </span>
                 <span className="text-slate-300">•</span>
-                <span className="text-emerald-700 font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span className={`font-bold flex items-center gap-1 ${business.is_open ? 'text-emerald-700' : 'text-rose-600'}`}>
+                  <span className={`w-2 h-2 rounded-full ${business.is_open ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                   <span>{business.is_open ? t('open_now') : t('closed_now')}</span>
                 </span>
               </div>

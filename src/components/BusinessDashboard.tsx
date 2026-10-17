@@ -188,7 +188,16 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
         setServices(srvRes);
         setStaff(stfRes);
         if (subRes) setSubData(subRes);
-        if (whRes) setWorkingHours(whRes);
+        if (whRes && whRes.length > 0) {
+          setWorkingHours(whRes);
+        } else {
+          setWorkingHours([0, 1, 2, 3, 4, 5, 6].map(d => ({
+            day_of_week: d,
+            open_time: '08:30',
+            close_time: '19:30',
+            is_closed: d === 0 ? 1 : 0
+          })));
+        }
         if (adRes) setAdAnalytics(adRes);
         if (extraSvcRes) setAvailableExtraServices(extraSvcRes);
         if (extraOrdRes) setExtraServiceOrders(extraOrdRes);
@@ -2477,8 +2486,8 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
             {['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba'].map((dayName, dayIndex) => {
               const current = workingHours.find(h => h.day_of_week === dayIndex) || {
                 day_of_week: dayIndex,
-                open_time: '09:00',
-                close_time: '18:00',
+                open_time: '08:30',
+                close_time: '19:30',
                 is_closed: dayIndex === 0 ? 1 : 0
               };
 
@@ -2515,14 +2524,14 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                       <div className="flex items-center gap-2">
                         <input
                           type="time"
-                          value={current.open_time || '09:00'}
+                          value={current.open_time || '08:30'}
                           onChange={(e) => updateDay('open_time', e.target.value)}
                           className="border border-slate-200 rounded-lg px-2 py-1 font-mono text-xs"
                         />
                         <span className="text-slate-400">—</span>
                         <input
                           type="time"
-                          value={current.close_time || '18:00'}
+                          value={current.close_time || '19:30'}
                           onChange={(e) => updateDay('close_time', e.target.value)}
                           className="border border-slate-200 rounded-lg px-2 py-1 font-mono text-xs"
                         />
@@ -2543,7 +2552,16 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                 setSavingHours(true);
                 setHoursSuccess('');
                 try {
-                  await api.updateBusinessWorkingHours(workingHours);
+                  const scheduleToSave = [0, 1, 2, 3, 4, 5, 6].map(dayIndex => {
+                    return workingHours.find(h => h.day_of_week === dayIndex) || {
+                      day_of_week: dayIndex,
+                      open_time: '08:30',
+                      close_time: '19:30',
+                      is_closed: dayIndex === 0 ? 1 : 0
+                    };
+                  });
+                  await api.updateBusinessWorkingHours(scheduleToSave);
+                  setWorkingHours(scheduleToSave);
                   setHoursSuccess('Ish jadvali muvaffaqiyatli yangilandi!');
                   showToast('Ish jadvali muvaffaqiyatli saqlandi!', 'success');
                 } catch (err: any) {

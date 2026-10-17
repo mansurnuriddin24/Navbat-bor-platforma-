@@ -1111,7 +1111,9 @@ interface TelegramAlertOptions {
 
 async function sendTelegramAlert(options: TelegramAlertOptions): Promise<{ success: boolean; status: string; error?: string }> {
   const { chatId, message, recipientType = 'SYSTEM', recipientId = null, botToken, replyMarkup } = options;
-  const token = botToken || getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
+  const defaultBusinessToken = getSetting('telegram_business_bot_token') || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
+  const defaultCustomerToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
+  const token = botToken || (recipientType === 'BUSINESS' ? (defaultBusinessToken || defaultCustomerToken) : defaultCustomerToken);
   const targetChatId = chatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
   const logId = 'tg-' + crypto.randomUUID().slice(0, 10);
 
@@ -2022,6 +2024,28 @@ function seedDatabase() {
     console.error('[Seed Nasaf Error]:', nasafErr.message);
   }
 
+  // Ensure all businesses have 7 days in business_hours
+  try {
+    const allBusinesses = db.prepare('SELECT id, name FROM businesses').all() as any[];
+    for (const b of allBusinesses) {
+      const hoursCount = (db.prepare('SELECT count(*) as count FROM business_hours WHERE business_id = ?').get(b.id) as any)?.count || 0;
+      if (hoursCount === 0) {
+        for (let day = 1; day <= 6; day++) {
+          db.prepare(`
+            INSERT OR IGNORE INTO business_hours (id, business_id, day_of_week, open_time, close_time, is_closed, break_start, break_end)
+            VALUES (?, ?, ?, '08:30', '19:30', 0, '13:00', '14:00')
+          `).run(`bh-${b.id}-${day}`, b.id, day);
+        }
+        db.prepare(`
+          INSERT OR IGNORE INTO business_hours (id, business_id, day_of_week, open_time, close_time, is_closed)
+          VALUES (?, ?, 0, '09:00', '18:00', 1)
+        `).run(`bh-${b.id}-0`, b.id);
+      }
+    }
+  } catch (hoursErr: any) {
+    console.error('[Business Hours Migration Error]:', hoursErr.message);
+  }
+
   console.log('[Seed] Core platform ready for production!');
 }
 
@@ -2318,6 +2342,12 @@ app.get('/api/cities', (req, res) => {
   res.json(rows);
 });
 
+// Helper: time in minutes
+function toMinutes(timeStr: string): number {
+  const [h, m] = (timeStr || '00:00').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
 // Helper: Calculate business open status strictly using Uzbekistan Timezone (Asia/Tashkent)
 function getTashkentBusinessHours(businessId: string): {
   isOpen: boolean;
@@ -2331,23 +2361,31 @@ function getTashkentBusinessHours(businessId: string): {
   const now = new Date();
   const tashkentTimeStr = now.toLocaleTimeString("en-GB", { timeZone: "Asia/Tashkent", hour: "2-digit", minute: "2-digit", hour12: false });
   const tashkentDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tashkent" }));
-  const tashkentDay = tashkentDate.getDay();
+  const tashkentDay = tashkentDate.getDay(); // 0: Sunday, 1: Monday, ... 6: Saturday
+
+  let openTime = '08:30';
+  let closeTime = '19:30';
+  let isClosedDay = false;
 
   const hours = db.prepare('SELECT * FROM business_hours WHERE business_id = ? AND day_of_week = ?').get(businessId, tashkentDay) as any;
-  if (!hours || hours.is_closed) {
-    return {
-      isOpen: false,
-      statusText: 'Yopiq',
-      hoursText: 'Dam olish kuni',
-      openTime: hours?.open_time || '09:00',
-      closeTime: hours?.close_time || '18:00',
-      isClosedDay: true,
-      message: 'Biznes hozir yopiq. Dam olish kuni.'
-    };
+  if (hours) {
+    isClosedDay = Boolean(hours.is_closed);
+    openTime = hours.open_time || '08:30';
+    closeTime = hours.close_time || '19:30';
+  } else {
+    // If no explicit row exists for today:
+    // Sunday (0) is a day off by default
+    if (tashkentDay === 0) {
+      isClosedDay = true;
+      openTime = '09:00';
+      closeTime = '18:00';
+    } else {
+      // Monday through Saturday (1 to 6) are active working days 08:30–19:30
+      isClosedDay = false;
+      openTime = '08:30';
+      closeTime = '19:30';
+    }
   }
-
-  const openTime = hours.open_time || '09:00';
-  const closeTime = hours.close_time || '18:00';
 
   // Check if business is temporarily closed by owner
   const bizCheck = db.prepare('SELECT is_temporarily_closed FROM businesses WHERE id = ?').get(businessId) as any;
@@ -2363,6 +2401,18 @@ function getTashkentBusinessHours(businessId: string): {
     };
   }
 
+  if (isClosedDay) {
+    return {
+      isOpen: false,
+      statusText: 'Dam olish kuni',
+      hoursText: 'Dam olish kuni',
+      openTime,
+      closeTime,
+      isClosedDay: true,
+      message: 'Biznes hozir yopiq. Dam olish kuni.'
+    };
+  }
+
   const curMins = toMinutes(tashkentTimeStr);
   const openMins = toMinutes(openTime);
   const closeMins = (closeTime === '00:00' || closeTime === '24:00') ? 1440 : toMinutes(closeTime);
@@ -2370,7 +2420,7 @@ function getTashkentBusinessHours(businessId: string): {
 
   return {
     isOpen,
-    statusText: isOpen ? 'Navbat mavjud' : 'Yopiq',
+    statusText: isOpen ? 'Navbat mavjud' : 'Hozir yopiq',
     hoursText: `${openTime}–${closeTime}`,
     openTime,
     closeTime,
@@ -2618,11 +2668,7 @@ app.get('/api/businesses/:slug', (req, res) => {
 // 3. REAL BOOKING ENGINE & AVAILABILITY
 // ==========================================
 
-// Helper: time in minutes
-function toMinutes(timeStr: string): number {
-  const [h, m] = timeStr.split(':').map(Number);
-  return h * 60 + m;
-}
+// Helper: convert minutes to time string
 
 function toTimeString(minutes: number): string {
   const h = Math.floor(minutes / 60).toString().padStart(2, '0');
@@ -3049,14 +3095,28 @@ app.post('/api/queue/join', requireAuth, (req, res) => {
     }
   }
   const finalBizChat = qBizChatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
+  const bizQueueAlert = `⚡️ <b>Yangi jonli navbatchi qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqami: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n👤 Mijoz: <b>${customer_name || user.name}</b> (📞 ${customer_phone || user.phone || 'Noma‘lum'})\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Jonli navbatlar soni: ${activeCount + 1} ta</i>`;
+  const bizQueueMarkup = {
+    inline_keyboard: [
+      [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${business_id}` }],
+      [{ text: '📋 Jonli navbat', callback_data: `biz_open_queue_${business_id}` }]
+    ]
+  };
+
   if (finalBizChat) {
     sendTelegramAlert({
       chatId: finalBizChat,
       recipientType: 'BUSINESS',
       recipientId: business_id,
-      message: `⚡️ <b>Yangi jonli navbatchi qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqami: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n👤 Mijoz: <b>${customer_name || user.name}</b> (📞 ${customer_phone || user.phone || 'Noma‘lum'})\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Jonli navbatlar soni: ${activeCount + 1} ta</i>`
-    });
+      message: bizQueueAlert,
+      replyMarkup: bizQueueMarkup
+    }).catch(() => {});
   }
+
+  // Also notify via dedicated Business Bot if owner is registered
+  try {
+    notifyBusinessOwnerViaBusinessBot(db, business_id, bizQueueAlert, { replyMarkup: bizQueueMarkup }).catch(() => {});
+  } catch (e) {}
 
   const botUser = getBotUsername();
   res.status(201).json({
@@ -13109,7 +13169,20 @@ app.get('/api/business/working-hours', requireAuth, (req, res) => {
   const biz = getUserBusiness(user.id);
   if (!biz) return res.status(403).json({ error: 'Biznes topilmadi' });
 
-  const hours = db.prepare('SELECT * FROM business_hours WHERE business_id = ? ORDER BY day_of_week ASC').all(biz.id);
+  let hours = db.prepare('SELECT * FROM business_hours WHERE business_id = ? ORDER BY day_of_week ASC').all(biz.id) as any[];
+  if (hours.length === 0) {
+    for (let day = 1; day <= 6; day++) {
+      db.prepare(`
+        INSERT OR IGNORE INTO business_hours (id, business_id, day_of_week, open_time, close_time, is_closed, break_start, break_end)
+        VALUES (?, ?, ?, '08:30', '19:30', 0, '13:00', '14:00')
+      `).run(`bh-${biz.id}-${day}`, biz.id, day);
+    }
+    db.prepare(`
+      INSERT OR IGNORE INTO business_hours (id, business_id, day_of_week, open_time, close_time, is_closed)
+      VALUES (?, ?, 0, '09:00', '18:00', 1)
+    `).run(`bh-${biz.id}-0`, biz.id);
+    hours = db.prepare('SELECT * FROM business_hours WHERE business_id = ? ORDER BY day_of_week ASC').all(biz.id) as any[];
+  }
   res.json(hours);
 });
 

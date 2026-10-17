@@ -2145,6 +2145,33 @@ app.get(['/health', '/api/health'], (req, res) => {
   res.json({ status: 'ok', name: 'NavbatBor API', timestamp: new Date().toISOString() });
 });
 
+// Google Search Console Site Verification & SEO Crawl Endpoints
+app.get('/google0d477628f122af6a.html', (req, res) => {
+  res.type('text/html').send('google-site-verification: google0d477628f122af6a.html');
+});
+
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send('User-agent: *\nAllow: /\n\nSitemap: https://www.navbatbor.uz/sitemap.xml\n');
+});
+
+app.get('/sitemap.xml', (req, res) => {
+  res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://www.navbatbor.uz/</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.navbatbor.uz/b/nasaf-dental-777</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+</urlset>`);
+});
+
 // Auth Helpers & Role RBAC
 const FOUNDER_EMAILS = ['rasulovjahongir074@gmail.com', 'admin@navbatbor.uz'];
 

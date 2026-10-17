@@ -1950,83 +1950,331 @@ function seedDatabase() {
     `).run();
   }
 
-  // 5. Ensure "Nasaf dental" application exists in PENDING status for Super Admin approval
+  // 5. Ensure Qarshi Pilot Businesses and Nasaf dental exist with APPROVED status
   try {
-    const existingNasaf = db.prepare("SELECT * FROM businesses WHERE name LIKE '%Nasaf%'").get() as any;
-    const existingApp = db.prepare("SELECT * FROM business_applications WHERE business_name LIKE '%Nasaf%'").get() as any;
+    const trialExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 
-    if (!existingNasaf) {
-      const bizId = 'biz-nasaf-dental';
-      const trialExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-
-      // Ensure owner user exists
-      let owner = db.prepare("SELECT * FROM users WHERE phone LIKE '%908862540%' OR email = 'mansurnuriddin24@gmail.com'").get() as any;
-      const ownerId = owner?.id || 'usr-abfcb7fe';
-      if (!owner) {
-        db.prepare(`
-          INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id)
-          VALUES (?, 'Nuriddinov Mansur', 'mansurnuriddin24@gmail.com', '+998908862540', ?, 'BUSINESS_OWNER', 'ACTIVE', '5564730141')
-        `).run(ownerId, hashPassword('Mansur1105'));
-      }
-
+    // Ensure owner user exists for Nasaf dental
+    let owner = db.prepare("SELECT * FROM users WHERE phone LIKE '%908862540%' OR email = 'mansurnuriddin24@gmail.com'").get() as any;
+    const ownerId = owner?.id || 'usr-abfcb7fe';
+    if (!owner) {
       db.prepare(`
-        INSERT OR IGNORE INTO businesses (
+        INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id)
+        VALUES (?, 'Nuriddinov Mansur', 'mansurnuriddin24@gmail.com', '+998908862540', ?, 'BUSINESS_OWNER', 'ACTIVE', '5564730141')
+      `).run(ownerId, hashPassword('Mansur1105'));
+    } else {
+      db.prepare("UPDATE users SET telegram_chat_id = '5564730141', role = 'BUSINESS_OWNER' WHERE id = ?").run(owner.id);
+    }
+
+    const qarshiPilotBusinesses = [
+      {
+        id: 'biz-nasaf-dental',
+        name: 'Nasaf dental',
+        slug: 'nasaf-dental-777',
+        category_id: 'cat-stomatology',
+        district: 'Markaz',
+        address: 'Qarshi shahri, Mustaqillik ko‘chasi 14',
+        phone: '+998908862540',
+        description: 'Zamonaviy stomatologiya va tish davolash, oqartirish, plombalash va implantatsiya markazi.',
+        is_sponsored: 1,
+        owner_id: ownerId,
+        latitude: 38.8615,
+        longitude: 65.7890,
+        services: [
+          { id: 'srv-nasaf-1', name: 'Tish ko‘rigi va konsultatsiya', price_uzs: 50000, duration: 30, desc: 'Malakali shifokor ko‘rigi va maslahati' },
+          { id: 'srv-nasaf-2', name: 'Tish tozalash va oqartirish (Air Flow)', price_uzs: 180000, duration: 45, desc: 'Tish toshlari va qatlamlardan tozalash' },
+          { id: 'srv-nasaf-3', name: 'Plomba qo‘yish (Fotopolimer)', price_uzs: 150000, duration: 40, desc: 'Yuqori sifatli germaniya fotopolimer plombasi' }
+        ],
+        staff: [
+          { id: 'stf-nasaf-1', name: 'Dr. Nuriddinov Mansur', title: 'Bosh shifokor-stomatolog', phone: '+998908862540', tg: '5564730141' }
+        ]
+      },
+      {
+        id: 'biz-denta-lux',
+        name: 'Denta Lux Qarshi',
+        slug: 'denta-lux-qarshi',
+        category_id: 'cat-stomatology',
+        district: 'G‘o‘ng‘on',
+        address: 'Qarshi shahri, Islom Karimov ko‘chasi 25',
+        phone: '+998912345678',
+        description: 'Oila stomatologiyasi: bolalar va kattalar tishlarini og‘riqsiz va zamonaviy davolash.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8640,
+        longitude: 65.7920,
+        services: [
+          { id: 'srv-dl-1', name: 'Bolalar tishini davolash', price_uzs: 70000, duration: 30, desc: 'Bolalar uchun og‘riqsiz va qulay qabul' },
+          { id: 'srv-dl-2', name: 'Tish plombalash', price_uzs: 120000, duration: 40, desc: 'Zamonaviy estetik plomba' }
+        ],
+        staff: [
+          { id: 'stf-dl-1', name: 'Dr. Karimov Bobur', title: 'Stomatolog-terapevt', phone: '+998912345678' }
+        ]
+      },
+      {
+        id: 'biz-nasaf-med',
+        name: 'Nasaf Med Klinikasi',
+        slug: 'nasaf-med-klinikasi',
+        category_id: 'cat-medicine',
+        district: 'Markaz',
+        address: 'Qarshi shahri, Nasaf ko‘chasi 52',
+        phone: '+998752210505',
+        description: 'Ko‘p tarmoqli tibbiyot markazi: Terapevt, Kardiolog, rangli UZI diagnostika va laboratoriya.',
+        is_sponsored: 1,
+        owner_id: 'usr-admin',
+        latitude: 38.8580,
+        longitude: 65.7950,
+        services: [
+          { id: 'srv-med-1', name: 'Terapevt ko‘rigi', price_uzs: 60000, duration: 25, desc: 'Umumiy salomatlik tekshiruvi va davolash rejasi' },
+          { id: 'srv-med-2', name: 'UZI diagnostika (To‘liq)', price_uzs: 90000, duration: 30, desc: 'Ichki a’zolar rangli doppler UZI tekshiruvi' },
+          { id: 'srv-med-3', name: 'EKG tekshiruvi', price_uzs: 40000, duration: 20, desc: 'Yurak ritmi va kardiogramma tahlili' }
+        ],
+        staff: [
+          { id: 'stf-med-1', name: 'Dr. Olimova Nilufar', title: 'Oliy toifali terapevt', phone: '+998752210505' },
+          { id: 'stf-med-2', name: 'Dr. Rustamov Jasur', title: 'Kardiolog-funksionalist', phone: '+998752210505' }
+        ]
+      },
+      {
+        id: 'biz-lazzat-beauty',
+        name: 'Lazzat Beauty Bar',
+        slug: 'lazzat-beauty-bar',
+        category_id: 'cat-beauty',
+        district: 'Mag‘zon',
+        address: 'Qarshi shahri, Amir Temur ko‘chasi 18',
+        phone: '+998907891234',
+        description: 'Go‘zallik saloni: Manikur, pedikur, soch turmaklash, tozalash va professional vizaj.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8655,
+        longitude: 65.7870,
+        services: [
+          { id: 'srv-lzt-1', name: 'Soch turmaklash va fen', price_uzs: 60000, duration: 40, desc: 'Kundalik va bayramona turmaklar' },
+          { id: 'srv-lzt-2', name: 'Apparatli manikur + gel lak', price_uzs: 90000, duration: 60, desc: 'Sifatli qoplama va tirnoq dizayni' }
+        ],
+        staff: [
+          { id: 'stf-lzt-1', name: 'Zarina Rahimova', title: 'Bosh stilist-vizajist', phone: '+998907891234' }
+        ]
+      },
+      {
+        id: 'biz-barber-king',
+        name: 'Barber King Qarshi',
+        slug: 'barber-king-qarshi',
+        category_id: 'cat-barber',
+        district: 'Universitet',
+        address: 'Qarshi shahri, Universitet ko‘chasi 8',
+        phone: '+998935551122',
+        description: 'Erkaklar sartaroshxonasi: Klassik va zamonaviy fade, soqol tekislash va yuz parvarishi.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8630,
+        longitude: 65.7830,
+        services: [
+          { id: 'srv-bk-1', name: 'Soch olish (Klassik / Fade)', price_uzs: 40000, duration: 30, desc: 'Professional mashinka va qaychida soch olish' },
+          { id: 'srv-bk-2', name: 'Soqol tekislash va shakl berish', price_uzs: 25000, duration: 20, desc: 'Issiq sochiq va maxsus moy bilan' }
+        ],
+        staff: [
+          { id: 'stf-bk-1', name: 'Sardor Barber', title: 'Top-barber', phone: '+998935551122' }
+        ]
+      },
+      {
+        id: 'biz-avto-lider',
+        name: 'Avto Lider Qarshi',
+        slug: 'avto-lider-qarshi',
+        category_id: 'cat-auto',
+        district: 'Xonobod',
+        address: 'Qarshi shahri, Xonobod shoh ko‘chasi 10',
+        phone: '+998906663344',
+        description: 'Tezkor avtoservis: Moy almashtirish, kompyuter diagnostika, xodovoy qismlarni ta’mirlash.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8540,
+        longitude: 65.7790,
+        services: [
+          { id: 'srv-avt-1', name: 'Moy almashtirish (Ekspress)', price_uzs: 30000, duration: 20, desc: 'Moy va filtrlar almashtirish xizmati' },
+          { id: 'srv-avt-2', name: 'Kompyuter diagnostika', price_uzs: 50000, duration: 30, desc: 'Barcha chek va xatoliklarni skanerlash' }
+        ],
+        staff: [
+          { id: 'stf-avt-1', name: 'Ulug‘bek Usta', title: 'Bosh avtodiagnost', phone: '+998906663344' }
+        ]
+      },
+      {
+        id: 'biz-nasaf-fitness',
+        name: 'Nasaf Fitness & Gym',
+        slug: 'nasaf-fitness-gym',
+        category_id: 'cat-sport',
+        district: 'Geolog',
+        address: 'Qarshi shahri, Geologlar ko‘chasi 4',
+        phone: '+998914447788',
+        description: 'Zamonaviy trenajyor zali, individual murabbiy mashg‘ulotlari va kardio zona.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8680,
+        longitude: 65.7980,
+        services: [
+          { id: 'srv-fit-1', name: 'Bir martalik trenajyor zali', price_uzs: 25000, duration: 90, desc: 'Barcha trenajyorlar va dushdan foydalanish' },
+          { id: 'srv-fit-2', name: 'Individual murabbiy mashg‘uloti', price_uzs: 60000, duration: 60, desc: 'Shaxsiy mashg‘ulot dasturi va nazorat' }
+        ],
+        staff: [
+          { id: 'stf-fit-1', name: 'Bekzod Trener', title: 'Fitnes instruktor', phone: '+998914447788' }
+        ]
+      },
+      {
+        id: 'biz-registon-it',
+        name: 'Registon IT & Til Markazi',
+        slug: 'registon-it-til-markazi',
+        category_id: 'cat-education',
+        district: 'Markaz',
+        address: 'Qarshi shahri, Mustaqillik ko‘chasi 45',
+        phone: '+998903332211',
+        description: 'IELTS, General English, Matematika va Zamonaviy IT dasturlash kurslari.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8610,
+        longitude: 65.7860,
+        services: [
+          { id: 'srv-reg-1', name: 'Bepul sinov darsi va daraja aniqlash', price_uzs: 0, duration: 45, desc: 'Ingliz tili yoki IT bo‘yicha bepul qabul' },
+          { id: 'srv-reg-2', name: 'Individual konsultatsiya', price_uzs: 30000, duration: 30, desc: 'O‘qish va xalqaro sertifikatlar bo‘yicha maslahat' }
+        ],
+        staff: [
+          { id: 'stf-reg-1', name: 'Azizbek Murodov', title: 'Akademik koordinator', phone: '+998903332211' }
+        ]
+      },
+      {
+        id: 'biz-adolat-yurist',
+        name: 'Adolat Yuridik Maslahatxona',
+        slug: 'adolat-yuridik-maslahatxona',
+        category_id: 'cat-consulting',
+        district: 'Markaz',
+        address: 'Qarshi shahri, Nasaf ko‘chasi 12',
+        phone: '+998752240101',
+        description: 'Fuqarolik, oila, ko‘chmas mulk va tadbirkorlik huquqi bo‘yicha malakali yuridik yordam.',
+        is_sponsored: 0,
+        owner_id: 'usr-admin',
+        latitude: 38.8590,
+        longitude: 65.7910,
+        services: [
+          { id: 'srv-yur-1', name: 'Birlamchi huquqiy konsultatsiya', price_uzs: 50000, duration: 30, desc: 'Hujjatlarni ko‘rib chiqish va maslahat' },
+          { id: 'srv-yur-2', name: 'Shartnoma tuzish va ekspertiza', price_uzs: 100000, duration: 45, desc: 'Shartnomalarni tekshirish va tayyorlash' }
+        ],
+        staff: [
+          { id: 'stf-yur-1', name: 'Alisher Vohidov', title: 'Katta advokat-yurist', phone: '+998752240101' }
+        ]
+      }
+    ];
+
+    for (const pb of qarshiPilotBusinesses) {
+      db.prepare(`
+        INSERT INTO businesses (
           id, owner_id, name, slug, category_id, city_id, district, address, phone, description,
           status, is_verified, is_sponsored, subscription_plan_code, subscription_expires_at,
-          subscription_status, is_trial, trial_used, trial_started_at, telegram_chat_id, telegram_user_id
+          subscription_status, is_trial, trial_used, trial_started_at, latitude, longitude,
+          telegram_chat_id, telegram_user_id
         ) VALUES (
-          ?, ?, 'Nasaf dental', 'nasaf-dental-777', 'cat-stomatology', 'city-qarshi', 'Markaz',
-          'Qarshi shahri, Mustaqillik ko‘chasi 14', '+998908862540', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
-          'PENDING', 0, 0, 'FREE', ?, 'TRIAL', 1, 1, CURRENT_TIMESTAMP, '5564730141', '5564730141'
+          ?, ?, ?, ?, ?, 'city-qarshi', ?, ?, ?, ?,
+          'APPROVED', 1, ?, 'FREE', ?,
+          'TRIAL', 1, 1, CURRENT_TIMESTAMP, ?, ?,
+          ?, ?
         )
-      `).run(bizId, ownerId, trialExpiry);
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          category_id = excluded.category_id,
+          status = 'APPROVED',
+          is_verified = 1,
+          is_sponsored = excluded.is_sponsored,
+          address = excluded.address,
+          phone = excluded.phone,
+          description = excluded.description,
+          latitude = excluded.latitude,
+          longitude = excluded.longitude
+      `).run(
+        pb.id,
+        pb.owner_id,
+        pb.name,
+        pb.slug,
+        pb.category_id,
+        pb.district,
+        pb.address,
+        pb.phone,
+        pb.description,
+        pb.is_sponsored,
+        trialExpiry,
+        pb.latitude,
+        pb.longitude,
+        pb.id === 'biz-nasaf-dental' ? '5564730141' : null,
+        pb.id === 'biz-nasaf-dental' ? '5564730141' : null
+      );
 
-      db.prepare(`
-        INSERT OR REPLACE INTO business_applications (
-          id, telegram_user_id, telegram_chat_id, telegram_username,
-          business_name, owner_name, owner_phone, category_id, city_id,
-          district, address, description, status, created_business_id, created_at, reviewed_at
-        ) VALUES (
-          'app-nasaf-dental', '5564730141', '5564730141', 'mansur_0511',
-          'Nasaf dental', 'Nuriddinov Mansur', '+998908862540', 'cat-stomatology', 'city-qarshi',
-          'Markaz', 'Qarshi shahri, Mustaqillik ko‘chasi 14', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
-          'PENDING', ?, CURRENT_TIMESTAMP, NULL
-        )
-      `).run(bizId);
-
+      // Business membership
       db.prepare(`
         INSERT OR IGNORE INTO business_memberships (id, business_id, user_id, role, permissions)
-        VALUES ('bm-nasaf-1', ?, ?, 'OWNER', '["ALL"]')
-      `).run(bizId, ownerId);
+        VALUES (?, ?, ?, 'OWNER', '["ALL"]')
+      `).run(`bm-${pb.id}`, pb.id, pb.owner_id);
 
-      db.prepare(`
-        INSERT OR IGNORE INTO services (id, business_id, name, duration_minutes, price_uzs, description, is_active)
-        VALUES ('srv-nasaf-1', ?, 'Tish ko‘rigi va konsultatsiya', 30, 50000, 'Malakali shifokor ko‘rigi va maslahati', 1)
-      `).run(bizId);
+      // Services
+      for (const s of pb.services) {
+        db.prepare(`
+          INSERT INTO services (id, business_id, name, duration_minutes, price_uzs, description, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, 1)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            duration_minutes = excluded.duration_minutes,
+            price_uzs = excluded.price_uzs,
+            description = excluded.description,
+            is_active = 1
+        `).run(s.id, pb.id, s.name, s.duration, s.price_uzs, s.desc);
+      }
 
-      db.prepare(`
-        INSERT OR IGNORE INTO staff (id, business_id, name, title, phone, is_active, telegram_chat_id)
-        VALUES ('stf-nasaf-1', ?, 'Dr. Nuriddinov Mansur', 'Bosh shifokor-stomatolog', '+998908862540', 1, '5564730141')
-      `).run(bizId);
+      // Staff
+      for (const st of pb.staff) {
+        db.prepare(`
+          INSERT INTO staff (id, business_id, name, title, phone, is_active, telegram_chat_id)
+          VALUES (?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            title = excluded.title,
+            phone = excluded.phone,
+            is_active = 1
+        `).run(st.id, pb.id, st.name, st.title, st.phone, (st as any).tg || null);
 
-      db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-nasaf-1', 'srv-nasaf-1')`).run();
-    } else if (existingNasaf.name === 'Nasaf Qarshi ' && (!existingApp || existingApp.status !== 'APPROVED')) {
-      db.prepare("UPDATE businesses SET name = 'Nasaf dental', category_id = 'cat-stomatology', status = 'PENDING', is_verified = 0 WHERE id = ?").run(existingNasaf.id);
-      db.prepare(`
-        INSERT OR REPLACE INTO business_applications (
-          id, telegram_user_id, telegram_chat_id, telegram_username,
-          business_name, owner_name, owner_phone, category_id, city_id,
-          district, address, description, status, created_business_id, created_at, reviewed_at
-        ) VALUES (
-          'app-nasaf-dental', '5564730141', '5564730141', 'mansur_0511',
-          'Nasaf dental', 'Nuriddinov Mansur', '+998908862540', 'cat-stomatology', 'city-qarshi',
-          'Markaz', 'Qarshi shahri, Mustaqillik ko‘chasi 14', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
-          'PENDING', ?, CURRENT_TIMESTAMP, NULL
-        )
-      `).run(existingNasaf.id);
+        // Link first service to this staff
+        if (pb.services.length > 0) {
+          db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES (?, ?)`).run(st.id, pb.services[0].id);
+        }
+      }
     }
-  } catch (nasafErr: any) {
-    console.error('[Seed Nasaf Error]:', nasafErr.message);
+
+    // Force approve any existing Nasaf dental in the database
+    db.prepare("UPDATE businesses SET status = 'APPROVED', is_verified = 1 WHERE name LIKE '%Nasaf%'").run();
+
+    // Ensure Nasaf dental application is marked APPROVED
+    db.prepare(`
+      INSERT OR REPLACE INTO business_applications (
+        id, telegram_user_id, telegram_chat_id, telegram_username,
+        business_name, owner_name, owner_phone, category_id, city_id,
+        district, address, description, status, created_business_id, created_at, reviewed_at
+      ) VALUES (
+        'app-nasaf-dental', '5564730141', '5564730141', 'mansur_0511',
+        'Nasaf dental', 'Nuriddinov Mansur', '+998908862540', 'cat-stomatology', 'city-qarshi',
+        'Markaz', 'Qarshi shahri, Mustaqillik ko‘chasi 14', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
+        'APPROVED', 'biz-nasaf-dental', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+    `).run();
+
+    // Provide a sample pending application for Super Admin moderation test
+    db.prepare(`
+      INSERT OR IGNORE INTO business_applications (
+        id, telegram_user_id, telegram_chat_id, telegram_username,
+        business_name, owner_name, owner_phone, category_id, city_id,
+        district, address, description, status, created_business_id, created_at, reviewed_at
+      ) VALUES (
+        'app-oqsaroy-med', '5564730141', '5564730141', 'mansur_0511',
+        'Oqsaroy Diagnostika Markazi', 'Qodirov Farrux', '+998971234567', 'cat-medicine', 'city-qarshi',
+        'Markaz', 'Qarshi shahri, Islom Karimov ko‘chasi 50', 'Zamonaviy laboratoriya va qon tahlillari diagnostikasi',
+        'PENDING', NULL, CURRENT_TIMESTAMP, NULL
+      )
+    `).run();
+
+  } catch (seedPilotErr: any) {
+    console.error('[Seed Pilot Businesses Error]:', seedPilotErr.message);
   }
 
   // Ensure all businesses have 7 days in business_hours

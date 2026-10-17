@@ -2760,9 +2760,9 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4 text-xs">
               {[
-                { days: 7, price: 99000, label: '7 Kun' },
-                { days: 15, price: 189000, label: '15 Kun' },
-                { days: 30, price: 349000, label: '30 Kun (Eng ommabop)' },
+                { days: 7, price: 29000, label: '7 Kun' },
+                { days: 15, price: 59000, label: '15 Kun' },
+                { days: 30, price: 99000, label: '30 Kun (Eng ommabop)' },
               ].map((tier) => (
                 <button
                   key={tier.days}
@@ -2789,20 +2789,20 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                 setPromoSuccess('');
                 try {
                   const res = await api.promoteBusiness({ duration_days: promoDays, payment_method: 'CLICK' });
-                  setPromoSuccess(res.message || 'Reklama muvaffaqiyatli faollashtirildi!');
+                  setPromoSuccess(res.message || 'Reklama arizangiz qabul qilindi! Administrator tasdiqlaganidan so‘ng faollashadi.');
                   const updatedAd = await api.getBusinessAdAnalytics();
                   setAdAnalytics(updatedAd);
-                  showToast('Reklama muvaffaqiyatli faollashtirildi!', 'success');
+                  showToast('Reklama arizangiz qabul qilindi!', 'success');
                 } catch (err: any) {
                   showToast(err.message || 'Reklamani yoqishda xatolik', 'error');
                 } finally {
                   setPromoting(false);
                 }
               }}
-              className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition shadow-md shadow-amber-500/20 flex items-center gap-2"
+              className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition shadow-md shadow-amber-500/20 flex items-center gap-2 cursor-pointer"
             >
               {promoting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
-              <span>{promoting ? 'Faollashtirilmoqda...' : `${promoDays} kunga Reklamani Yoqish`}</span>
+              <span>{promoting ? 'Yuborilmoqda...' : `${promoDays} kunga Reklama Arizasini Yuborish`}</span>
             </button>
           </div>
         </div>

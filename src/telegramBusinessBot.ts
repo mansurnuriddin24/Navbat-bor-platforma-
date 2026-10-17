@@ -2624,6 +2624,58 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
     return;
   }
 
+  // 7b. SUPER ADMIN PROMO / REKLAMA APPROVAL & REJECTION
+  if (data.startsWith('admin_approve_promo_')) {
+    const promoId = data.replace('admin_approve_promo_', '').trim();
+    if (auth.role !== 'SUPER_ADMIN') {
+      await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
+      return;
+    }
+
+    const promo = db.prepare('SELECT * FROM ad_promotions WHERE id = ?').get(promoId) as any;
+    if (!promo) {
+      await sendBusinessBotMessage(cbChatId, '⚠️ Reklama arizasi topilmadi.');
+      return;
+    }
+
+    db.prepare("UPDATE ad_promotions SET status = 'ACTIVE' WHERE id = ?").run(promoId);
+    db.prepare("UPDATE businesses SET is_sponsored = 1 WHERE id = ?").run(promo.business_id);
+
+    const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(promo.business_id) as any;
+    await sendBusinessBotMessage(
+      cbChatId,
+      `✅ <b>REKLAMA ARIZASI TASDIQLANDI!</b>\n━━━━━━━━━━━━━━━━\n` +
+      `🏢 Muassasa: <b>${biz?.name || 'Muassasa'}</b>\n` +
+      `⚡️ Holat: <b>TOP Featured o‘ringa chiqarildi!</b>`
+    );
+
+    try {
+      notifyBusinessOwnerViaBusinessBot(
+        db,
+        promo.business_id,
+        `🎉 <b>REKLAMA ARIZANGIZ TASDIQLANDI!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `Sizning <b>${biz?.name || 'Muassasangiz'}</b> ma’muriyat tomonidan tasdiqlandi va NavbatBor qidiruvida eng yuqori (TOP Featured) o‘ringa joylashtirildi!\n\n` +
+        `Endi mijozlar sizni birinchi o‘rinda ko‘rishadi.`
+      ).catch(() => {});
+    } catch (e) {}
+    return;
+  }
+
+  if (data.startsWith('admin_reject_promo_')) {
+    const promoId = data.replace('admin_reject_promo_', '').trim();
+    if (auth.role !== 'SUPER_ADMIN') {
+      await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
+      return;
+    }
+
+    db.prepare("UPDATE ad_promotions SET status = 'REJECTED' WHERE id = ?").run(promoId);
+    await sendBusinessBotMessage(
+      cbChatId,
+      `❌ <b>Reklama arizasi rad etildi / bekor qilindi.</b>`
+    );
+    return;
+  }
+
   // 8. SUPER ADMIN VIEW DETAILS
   if (data.startsWith('admin_view_')) {
     const appId = data.replace('admin_view_', '');

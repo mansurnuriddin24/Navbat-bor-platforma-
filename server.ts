@@ -101,7 +101,7 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'APPROVED' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED')),
     is_verified INTEGER DEFAULT 1,
     is_sponsored INTEGER DEFAULT 0,
-    subscription_plan_code TEXT DEFAULT 'PRO',
+    subscription_plan_code TEXT DEFAULT 'FREE',
     latitude REAL,
     longitude REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1111,7 +1111,7 @@ interface TelegramAlertOptions {
 
 async function sendTelegramAlert(options: TelegramAlertOptions): Promise<{ success: boolean; status: string; error?: string }> {
   const { chatId, message, recipientType = 'SYSTEM', recipientId = null, botToken, replyMarkup } = options;
-  const defaultBusinessToken = getSetting('telegram_business_bot_token') || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
+  const defaultBusinessToken = getSetting('telegram_business_bot_token') || process.env.BUSINESS_BOT_TOKEN || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
   const defaultCustomerToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
   const token = botToken || (recipientType === 'BUSINESS' ? (defaultBusinessToken || defaultCustomerToken) : defaultCustomerToken);
   const targetChatId = chatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -1479,7 +1479,11 @@ async function checkAndSendBookingReminders() {
 
         // 2. Telegram Alert (respecting customer's 30-minute reminder toggle)
         if (b.reminder_30m_enabled === 1) {
-          const targetChatId = b.customer_tg || b.biz_tg;
+          const targetChatId = b.customer_tg || resolveCustomerTelegramChatId({
+            customer_id: b.customer_id,
+            customer_phone: b.customer_phone || b.user_phone,
+            customer_name: b.customer_name || b.user_name
+          });
           if (targetChatId) {
             sendTelegramAlert({
               chatId: targetChatId,
@@ -1487,7 +1491,7 @@ async function checkAndSendBookingReminders() {
               recipientId: b.customer_id,
               message: `⏰ <b>Eslatma: Qabulingizga ${timeLeftStr} qoldi!</b>\n━━━━━━━━━━━━━━━━\n📋 Bron raqami: <b>#${b.booking_number}</b>\n🏢 Muassasa: <b>${b.business_name}</b>\n🩺 Xizmat: <b>${b.service_name}</b>\n👨‍⚕️ Mutaxassis: <b>${b.staff_name}</b>\n⏰ Vaqt: <b>Bugun, soat ${b.start_time}</b>\n📍 Manzil: <b>${b.business_address || 'Qarshi shahri'}</b>\n━━━━━━━━━━━━━━━━\n<i>Iltimos, o‘z vaqtida kelishingizni so‘raymiz! NavbatBor</i>`
             });
-            console.log(`[Reminder Service] Sent 30m Telegram reminder for #${b.booking_number} (${timeLeftStr} left)`);
+            console.log(`[Reminder Service] Sent 30m Telegram reminder for #${b.booking_number} (${timeLeftStr} left) to chat ${targetChatId}`);
           }
         } else {
           console.log(`[Reminder Service] Telegram reminder for #${b.booking_number} skipped: customer disabled 30m reminders.`);
@@ -1842,6 +1846,7 @@ function seedDatabase() {
         features_json, limits_json, is_active, is_available_for_purchase
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(code) DO UPDATE SET
+        name = excluded.name,
         price_uzs = excluded.price_uzs,
         max_staff = excluded.max_staff,
         max_monthly_bookings = excluded.max_monthly_bookings,
@@ -1972,7 +1977,7 @@ function seedDatabase() {
         ) VALUES (
           ?, ?, 'Nasaf dental', 'nasaf-dental-777', 'cat-stomatology', 'city-qarshi', 'Markaz',
           'Qarshi shahri, Mustaqillik ko‘chasi 14', '+998908862540', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
-          'PENDING', 0, 0, 'PRO', ?, 'TRIAL', 1, 1, CURRENT_TIMESTAMP, '5564730141', '5564730141'
+          'PENDING', 0, 0, 'FREE', ?, 'TRIAL', 1, 1, CURRENT_TIMESTAMP, '5564730141', '5564730141'
         )
       `).run(bizId, ownerId, trialExpiry);
 
@@ -6489,7 +6494,7 @@ app.post('/api/businesses/register', (req, res) => {
       status, subscription_plan_code, is_verified, is_sponsored, latitude, longitude,
       subscription_expires_at, subscription_status, is_trial, trial_used, trial_started_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'PRO', 0, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'FREE', 0, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
   `).run(bizId, user.id, name, slug, category_id, city_id, district || '', address, phone, description || '', finalLat, finalLng, trialExpiryDate, nowIso);
 
   // Also record in business_applications for admin audit and bot synchronization
@@ -6633,7 +6638,7 @@ app.post('/api/businesses/register', (req, res) => {
       name, 
       slug, 
       status: 'PENDING',
-      subscription_plan_code: 'PRO',
+      subscription_plan_code: 'FREE',
       subscription_status: 'TRIAL',
       subscription_expires_at: trialExpiryDate,
       is_trial: 1,
@@ -9168,6 +9173,58 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
+    // Admin: Approve / Reject Advertising Promotion Callbacks
+    if (cbData && cbData.startsWith('admin_approve_promo_')) {
+      const promoId = cbData.replace('admin_approve_promo_', '').trim();
+      const adminUser = getAdminForTelegramUser(cbChatId, cbUserId);
+      if (!adminUser) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Bu amal faqat administratorlar uchun ochiq.' });
+        return;
+      }
+
+      const promo = db.prepare('SELECT * FROM ad_promotions WHERE id = ?').get(promoId) as any;
+      if (!promo) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⚠️ Reklama arizasi topilmadi.' });
+        return;
+      }
+
+      db.prepare("UPDATE ad_promotions SET status = 'ACTIVE' WHERE id = ?").run(promoId);
+      db.prepare("UPDATE businesses SET is_sponsored = 1 WHERE id = ?").run(promo.business_id);
+
+      const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(promo.business_id) as any;
+      await sendTelegramAlert({
+        chatId: cbChatId,
+        message: `✅ <b>REKLAMA TASDIQLANDI!</b>\n━━━━━━━━━━━━━━━━\n🏢 Muassasa: <b>${biz?.name || 'Muassasa'}</b>\n⚡️ Holat: <b>TOP Featured faollashtirildi!</b>`
+      });
+
+      try {
+        notifyBusinessOwnerViaBusinessBot(
+          db,
+          promo.business_id,
+          `🎉 <b>REKLAMA ARIZANGIZ TASDIQLANDI!</b>\n━━━━━━━━━━━━━━━━\n` +
+          `Sizning <b>${biz?.name || 'Muassasangiz'}</b> ma’muriyat tomonidan tasdiqlandi va NavbatBor qidiruvida eng yuqori (TOP Featured) o‘ringa joylashtirildi!\n\n` +
+          `Endi mijozlar sizni birinchi o‘rinda ko‘rishadi.`
+        ).catch(() => {});
+      } catch (e) {}
+      return;
+    }
+
+    if (cbData && cbData.startsWith('admin_reject_promo_')) {
+      const promoId = cbData.replace('admin_reject_promo_', '').trim();
+      const adminUser = getAdminForTelegramUser(cbChatId, cbUserId);
+      if (!adminUser) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Bu amal faqat administratorlar uchun ochiq.' });
+        return;
+      }
+
+      db.prepare("UPDATE ad_promotions SET status = 'REJECTED' WHERE id = ?").run(promoId);
+      await sendTelegramAlert({
+        chatId: cbChatId,
+        message: `❌ <b>Reklama arizasi rad etildi / bekor qilindi.</b>`
+      });
+      return;
+    }
+
     // Default Customer Navigation Callbacks
     if (cbData === 'check_queue' || cbData === 'navbat') {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '/navbat' };
@@ -10528,6 +10585,15 @@ async function processTelegramUpdate(update: any): Promise<void> {
         WHERE (customer_phone LIKE ? OR customer_phone = ? OR customer_id = ?) AND status IN ('WAITING', 'CALLED')
       `).run(chatId, `%${last9}%`, formattedPhone, authedUser.id);
 
+      // Link any existing bookings for this phone to this customer ID
+      try {
+        db.prepare(`
+          UPDATE bookings 
+          SET customer_id = ? 
+          WHERE (customer_phone LIKE ? OR customer_phone = ?)
+        `).run(authedUser.id, `%${last9}%`, formattedPhone);
+      } catch (e) {}
+
       await sendTelegramAlert({
         chatId,
         message: `🎉 <b>Muvaffaqiyatli ro‘yxatdan o‘tdingiz!</b>\n` +
@@ -10541,7 +10607,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
           `• Shifoxona, klinika va salonlarga onlayn navbat olish\n` +
           `• Navbatingizga 1-2 kishi qolganda Telegramda ogohlantirish olish\n` +
           `• Navbatingiz yetganda darhol chaqiruv xabarini qabul qilish\n` +
-          `• Rejalashtirilgan qabullaringizni kuzatib borish.`,
+          `• Rejalashtirilgan qabullaringizga 30 daqiqa qolganda eslatma olish.`,
         replyMarkup: {
           inline_keyboard: [
             [{ text: '🚀 NavbatBor ilovasini ochish', web_app: { url: appUrl } }],
@@ -10550,6 +10616,50 @@ async function processTelegramUpdate(update: any): Promise<void> {
           ]
         }
       });
+
+      // Check if customer has any active tickets or bookings right now to show them immediately
+      const activeTickets = db.prepare(`
+        SELECT q.*, b.name as business_name, s.name as service_name
+        FROM queue_entries q
+        JOIN businesses b ON q.business_id = b.id
+        JOIN services s ON q.service_id = s.id
+        WHERE q.telegram_chat_id = ? AND q.status IN ('WAITING', 'CALLED')
+        ORDER BY q.joined_at ASC
+      `).all(chatId) as any[];
+
+      const upcomingBookings = db.prepare(`
+        SELECT b.*, biz.name as business_name, s.name as service_name
+        FROM bookings b
+        JOIN businesses biz ON b.business_id = biz.id
+        JOIN services s ON b.service_id = s.id
+        WHERE (b.customer_id = ? OR b.customer_phone LIKE ?)
+          AND b.status IN ('CONFIRMED', 'PENDING')
+          AND b.booking_date >= date('now', '+5 hours')
+        ORDER BY b.booking_date ASC, b.start_time ASC
+        LIMIT 3
+      `).all(authedUser.id, `%${last9}%`) as any[];
+
+      if (activeTickets.length > 0 || upcomingBookings.length > 0) {
+        let activeSummary = `📋 <b>Sizning faol navbat va bronlaringiz:</b>\n━━━━━━━━━━━━━━━━\n`;
+        if (activeTickets.length > 0) {
+          activeSummary += `🎫 <b>Jonli navbatlar:</b>\n`;
+          for (const t of activeTickets) {
+            const isCalled = t.status === 'CALLED';
+            activeSummary += `• #${t.queue_number} — <b>${t.business_name}</b> (${t.service_name})\n  Holat: <b>${isCalled ? '📢 CHAQIRILGAN (Qabulga kiring)' : '⏳ Kutilmoqda'}</b>\n`;
+          }
+        }
+        if (upcomingBookings.length > 0) {
+          activeSummary += `\n📅 <b>Yaqinlashib kelayotgan bronlar:</b>\n`;
+          for (const bk of upcomingBookings) {
+            activeSummary += `• #${bk.booking_number} — <b>${bk.business_name}</b>\n  Sana: <b>${bk.booking_date} soat ${bk.start_time}</b>\n`;
+          }
+        }
+        activeSummary += `\n<i>Eslatmalar va navbat xabarlari avtomatik tarzda ushbu botga yetkaziladi!</i>`;
+        await sendTelegramAlert({
+          chatId,
+          message: activeSummary
+        });
+      }
 
       // Trigger near queue check for any matched businesses
       const matchedEntries = db.prepare(`
@@ -11906,7 +12016,7 @@ app.post('/api/admin/businesses', requireAuth, requireRole(['ADMIN', 'SUPER_ADMI
     logo_url = '',
     latitude = 38.8600,
     longitude = 65.7890,
-    subscription_plan_code = 'PRO',
+    subscription_plan_code = 'FREE',
     owner_id, // Existing owner ID (optional)
     owner_name, // If creating new owner
     owner_email,
@@ -13211,33 +13321,64 @@ app.put('/api/business/working-hours', requireAuth, (req, res) => {
   res.json({ success: true, message: 'Ish vaqti jadvali muvaffaqiyatli yangilandi' });
 });
 
-// Business Advertising & Promotion (TOP Placement)
+// Business Advertising & Promotion (TOP Placement) - Strictly requires Super Admin approval!
 app.post('/api/business/promote', requireAuth, (req, res) => {
   const user = (req as any).user;
   const biz = getUserBusiness(user.id);
   if (!biz) return res.status(403).json({ error: 'Biznes topilmadi' });
 
-  const { duration_days = 30, payment_method = 'PAYME' } = req.body;
-  const amount_uzs = duration_days === 30 ? 190000 : duration_days * 7000;
-
-  db.prepare('UPDATE businesses SET is_sponsored = 1 WHERE id = ?').run(biz.id);
+  const { duration_days = 7, payment_method = 'CLICK' } = req.body;
+  const duration = Number(duration_days) || 7;
+  const promoPriceMap: Record<number, number> = {
+    7: 29000,
+    15: 59000,
+    30: 99000
+  };
+  const amount_uzs = promoPriceMap[duration] || duration * 3500;
 
   const promoId = 'ad-' + crypto.randomUUID().slice(0, 8);
   const endDate = new Date();
-  endDate.setDate(endDate.getDate() + duration_days);
+  endDate.setDate(endDate.getDate() + duration);
   const endStr = endDate.toISOString().replace('T', ' ').slice(0, 19);
 
+  // Status is PENDING_APPROVAL - does NOT activate until Super Admin approves!
   db.prepare(`
     INSERT INTO ad_promotions (id, business_id, plan_type, end_date, amount_uzs, status, payment_method)
-    VALUES (?, ?, 'TOP_FEATURED', ?, ?, 'ACTIVE', ?)
+    VALUES (?, ?, 'TOP_FEATURED', ?, ?, 'PENDING_APPROVAL', ?)
   `).run(promoId, biz.id, endStr, amount_uzs, payment_method);
 
-  logAudit(user.id, user.email, 'BUSINESS_PROMOTED', 'BUSINESS', biz.id, `TOP Reklama: ${duration_days} kun, ${amount_uzs} UZS`);
+  logAudit(user.id, user.email, 'BUSINESS_PROMOTED_REQUEST', 'BUSINESS', biz.id, `TOP Reklama arizasi: ${duration} kun, ${amount_uzs} UZS`);
+
+  // Send Telegram Alert with Approval button to Super Admin
+  const adminMsg = `📢 <b>Yangi Reklama / TOP O‘rin Arizasi!</b>\n━━━━━━━━━━━━━━━━\n` +
+    `🏢 Muassasa: <b>${biz.name}</b>\n` +
+    `👤 Egasi: <b>${user.name}</b> (📞 ${user.phone || biz.phone || 'Kiritilmagan'})\n` +
+    `⏱ Muddat: <b>${duration} kun</b>\n` +
+    `💰 Summa: <b>${amount_uzs.toLocaleString('uz-UZ')} UZS</b>\n` +
+    `💳 Usul: <b>${payment_method}</b>\n` +
+    `📅 Ariza vaqti: <b>${new Date().toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' })}</b>\n━━━━━━━━━━━━━━━━\n` +
+    `<i>Arizani tasdiqlash uchun quyidagi tugmani bosing:</i>`;
+
+  const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '5564730141').split(',').map(s => s.trim()).filter(Boolean);
+  const adminMarkup = {
+    inline_keyboard: [
+      [
+        { text: '✅ Tasdiqlash (Reklamani yoqish)', callback_data: `admin_approve_promo_${promoId}` },
+        { text: '❌ Rad etish', callback_data: `admin_reject_promo_${promoId}` }
+      ]
+    ]
+  };
+
+  for (const adminChatId of superAdminIds) {
+    sendBusinessBotMessage(adminChatId, adminMsg, { replyMarkup: adminMarkup }).catch(() => {});
+    sendTelegramAlert({ chatId: adminChatId, message: adminMsg, replyMarkup: adminMarkup }).catch(() => {});
+  }
 
   res.json({ 
     success: true, 
-    message: `Muassasangiz muvaffaqiyatli TOP Featured o‘ringa joylashtirildi! Muddat: ${duration_days} kun`,
-    promo: { id: promoId, end_date: endStr, amount_uzs }
+    pending: true,
+    message: `Reklama arizangiz qabul qilindi! Administrator tasdiqlaganidan so‘ng muassasangiz TOP Featured o‘ringa joylashtiriladi. (Muddat: ${duration} kun, Narxi: ${amount_uzs.toLocaleString('uz-UZ')} UZS)`,
+    promo: { id: promoId, end_date: endStr, amount_uzs, status: 'PENDING_APPROVAL' }
   });
 });
 
@@ -13246,18 +13387,23 @@ app.get('/api/business/ad-analytics', requireAuth, (req, res) => {
   const biz = getUserBusiness(user.id);
   if (!biz) return res.status(403).json({ error: 'Biznes topilmadi' });
 
-  const promo = db.prepare("SELECT * FROM ad_promotions WHERE business_id = ? AND status = 'ACTIVE' ORDER BY start_date DESC LIMIT 1").get(biz.id) as any;
+  const activePromo = db.prepare("SELECT * FROM ad_promotions WHERE business_id = ? AND status = 'ACTIVE' AND end_date > CURRENT_TIMESTAMP ORDER BY start_date DESC LIMIT 1").get(biz.id) as any;
+  const pendingPromo = db.prepare("SELECT * FROM ad_promotions WHERE business_id = ? AND status = 'PENDING_APPROVAL' ORDER BY start_date DESC LIMIT 1").get(biz.id) as any;
   const totalBookings = (db.prepare("SELECT COUNT(*) as count FROM bookings WHERE business_id = ?").get(biz.id) as any)?.count || 0;
   
-  const impressions = promo ? promo.impressions : 0;
-  const clicks = promo ? promo.clicks : 0;
+  const impressions = activePromo ? activePromo.impressions : 0;
+  const clicks = activePromo ? activePromo.clicks : 0;
   const ctrPercent = impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) + '%' : '0.0%';
 
   res.json({
-    is_sponsored: biz.is_sponsored === 1,
-    active_promo: promo || null,
+    is_sponsored: Boolean(biz.is_sponsored === 1 && activePromo),
+    active_promo: activePromo || null,
+    pending_promo: pendingPromo || null,
+    sponsored_until: activePromo?.end_date || null,
     impressions,
     clicks,
+    ctrPercent,
+    totalBookings,
     bookings_count: totalBookings,
     ctr_percent: ctrPercent
   });
@@ -14705,7 +14851,71 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[NavbatBor] Server running on http://0.0.0.0:${PORT}`);
+    // Sync bot bios and descriptions on startup
+    syncTelegramBotProfiles().catch(() => {});
   });
+}
+
+// Automatically sync Telegram bot profiles, descriptions and bios
+async function syncTelegramBotProfiles() {
+  const customerToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
+  const businessToken = getSetting('telegram_business_bot_token') || process.env.BUSINESS_BOT_TOKEN || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
+
+  if (customerToken && customerToken.length > 10) {
+    try {
+      await fetch(`https://api.telegram.org/bot${customerToken}/setMyShortDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          short_description: 'NavbatBor — Onlayn navbat olish va bronlash tizimi. Navbatingizni tejang! ⏱'
+        })
+      });
+
+      await fetch(`https://api.telegram.org/bot${customerToken}/setMyDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: `NavbatBor — O‘zbekistondagi klinika, shifoxona, salon va xizmat ko‘rsatish maskanlarida onlayn navbat olish va vaqtingizni tejash platformasi.\n\n` +
+            `🔹 Jonli navbat olish va navbatingizni real-vaqtda kuzatish\n` +
+            `🔹 Navbatingizga 1-2 kishi qolganda avtomatik Telegram eslatma\n` +
+            `🔹 Qabul vaqtingizga 30 daqiqa qolganda ogohlantirish\n` +
+            `🔹 Navbatingiz yetganda darhol xabar olish\n` +
+            `🔹 Veb-sayt: https://navbatbor.uz`
+        })
+      });
+      console.log('[Bot Profile Sync] Customer bot profile synced successfully.');
+    } catch (e) {
+      console.error('[Bot Profile Sync] Customer bot profile sync error:', e);
+    }
+  }
+
+  if (businessToken && businessToken.length > 10) {
+    try {
+      await fetch(`https://api.telegram.org/bot${businessToken}/setMyShortDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          short_description: 'NavbatBor — Biznes egalari va xodimlar uchun navbat va CRM boti 🏢'
+        })
+      });
+
+      await fetch(`https://api.telegram.org/bot${businessToken}/setMyDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: `NavbatBor Biznes Boti — Shifoxona, klinika, go‘zallik saloni, avtoservis va boshqa xizmat ko‘rsatish maskanlari egalari hamda xodimlari uchun yagona boshqaruv tizimi.\n\n` +
+            `🏢 Biznesingizni ro‘yxatdan o‘tkazish (14 kunlik bepul sinov)\n` +
+            `🟢 Jonli navbatni chaqirish va navbatdagi mijozlarni boshqarish\n` +
+            `📅 Onlayn bronlarni tasdiqlash va ko‘rish\n` +
+            `📊 Kunlik tushum va xizmatlar statistikasini kuzatish\n` +
+            `🌐 Veb-sayt: https://navbatbor.uz`
+        })
+      });
+      console.log('[Bot Profile Sync] Business bot profile synced successfully.');
+    } catch (e) {
+      console.error('[Bot Profile Sync] Business bot profile sync error:', e);
+    }
+  }
 }
 
 startServer();

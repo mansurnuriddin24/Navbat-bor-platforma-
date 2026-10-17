@@ -2812,6 +2812,7 @@ async function renderLiveQueueMessage(chatId: string, businessId: string, db: Da
 // ========================================================
 let isBusinessPollingActive = false;
 let businessUpdateOffset = 0;
+export let lastBusinessPollTime = 0;
 
 export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
   const token = getBusinessBotToken();
@@ -2833,6 +2834,7 @@ export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
   const pollLoop = async () => {
     while (isBusinessPollingActive) {
       try {
+        lastBusinessPollTime = Date.now();
         const resp = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${businessUpdateOffset}&timeout=25&allowed_updates=["message","callback_query"]`, {
           signal: AbortSignal.timeout(35000)
         });
@@ -2846,18 +2848,33 @@ export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
         if (data.ok && Array.isArray(data.result)) {
           for (const update of data.result) {
             businessUpdateOffset = Math.max(businessUpdateOffset, update.update_id + 1);
-            await processBusinessBotUpdate(update, db);
+            try {
+              await processBusinessBotUpdate(update, db);
+            } catch (uErr) {
+              console.error('[Business Bot Poller] Update processing error:', uErr);
+            }
           }
         } else if (!data.ok) {
           console.error('[Business Bot Poller] Telegram API error:', data.error_code, data.description);
           await new Promise(r => setTimeout(r, 3000));
         }
       } catch (err: any) {
-        // Sleep on error to prevent spinning
+        // Sleep on error to prevent CPU spinning on network glitches
         await new Promise(r => setTimeout(r, 4000));
       }
     }
   };
 
-  pollLoop().catch(e => console.error('[Business Bot Poller Loop Error]:', e));
+  const runPollerSupervisor = async () => {
+    while (isBusinessPollingActive) {
+      try {
+        await pollLoop();
+      } catch (loopErr) {
+        console.error('[Business Bot Poller] Loop crashed, auto-recovering in 5 seconds...', loopErr);
+        await new Promise(r => setTimeout(r, 5000));
+      }
+    }
+  };
+
+  runPollerSupervisor().catch(e => console.error('[Business Bot Poller Supervisor Error]:', e));
 }

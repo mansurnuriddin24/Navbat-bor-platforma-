@@ -24,6 +24,7 @@ import {
   initBusinessBotDatabase,
   processBusinessBotUpdate,
   startBusinessBotPolling,
+  lastBusinessPollTime,
   getBusinessBotWebhookSecret,
   approveBusinessApplication,
   rejectBusinessApplication,
@@ -1888,7 +1889,7 @@ function seedDatabase() {
   // 4. Initial Core Admin & Team Users
   const users = [
     { id: 'usr-admin-jahongir', name: 'Jahongir Rasulov', email: 'rasulovjahongir074@gmail.com', phone: '+998901234567', pass: 'admin123', role: 'FOUNDER' },
-    { id: 'usr-admin', name: 'Super Admin', email: 'mansurnuriddinov24@gmail.com', phone: '+998200232540', pass: 'Mansur1105.', role: 'ADMIN' },
+    { id: 'usr-admin', name: 'Super Admin', email: 'mansur@gmail.com', phone: '+998200232540', pass: 'Mansur1105', role: 'ADMIN' },
     { id: 'usr-operating-partner-qarshi', name: 'Alisher Qodirov (Qarshi Boshqaruvchi)', email: 'partner@navbatbor.uz', phone: '+998971234567', pass: 'partner123', role: 'OPERATING_PARTNER' },
     { id: 'usr-sales-manager-1', name: 'Bobur Mirzayev (Sotuv Menejeri)', email: 'sales@navbatbor.uz', phone: '+998901112233', pass: 'sales123', role: 'SALES_MANAGER' },
     { id: 'usr-support-1', name: 'Texnik Qo‘llab-quvvatlash Markazi', email: 'support-desk@navbatbor.uz', phone: '+998200232540', pass: 'support123', role: 'SUPPORT' },
@@ -2164,10 +2165,11 @@ app.post('/api/auth/login', (req, res) => {
   const hash = hashPassword(password);
   let user = db.prepare('SELECT id, name, email, phone, role, status FROM users WHERE (email = ? COLLATE NOCASE OR phone = ?) AND password_hash = ?').get(rawIdentifier, rawIdentifier, hash) as any;
   
-  // Super Admin maxsus moslashuvi: admin@navbatbor.uz yoki mansurnuriddin pochtalari orqali kirish
+  // Super Admin maxsus moslashuvi: mansur@gmail.com yoki admin pochtalari orqali kirish
   if (!user) {
     const lowerId = rawIdentifier.toLowerCase();
-    const isAdminIdentifier = lowerId === 'admin@navbatbor.uz' || 
+    const isAdminIdentifier = lowerId === 'mansur@gmail.com' ||
+                              lowerId === 'admin@navbatbor.uz' || 
                               lowerId === 'admin' || 
                               lowerId === 'mansurnuriddin24@gmail.com' || 
                               lowerId === 'mansurnuriddinov24@gmail.com' ||
@@ -2177,7 +2179,7 @@ app.post('/api/auth/login', (req, res) => {
     if (isAdminIdentifier) {
       const adminUser = db.prepare("SELECT id, name, email, phone, role, status, password_hash FROM users WHERE id = 'usr-admin'").get() as any;
       if (adminUser) {
-        if (adminUser.password_hash === hash || hashPassword('Mansur1105.') === hash || hashPassword('admin123') === hash) {
+        if (adminUser.password_hash === hash || hashPassword('Mansur1105') === hash || hashPassword('Mansur1105.') === hash || hashPassword('admin123') === hash) {
           user = {
             id: adminUser.id,
             name: adminUser.name,
@@ -2329,11 +2331,8 @@ app.get('/api/businesses', (req, res) => {
   const hasUserCoords = userLat !== null && !isNaN(userLat) && userLng !== null && !isNaN(userLng);
 
   let whereClauses = [
-    "b.status = 'APPROVED'",
-    "(b.is_test IS NULL OR b.is_test = 0)",
-    "b.name NOT LIKE 'Klinika Test%'",
-    "b.name NOT LIKE 'Test%'",
-    "(ct.id = 'city-qarshi' OR ct.name LIKE '%Qarshi%')"
+    "(b.status = 'APPROVED' OR b.status = 'ACTIVE')",
+    "(b.is_test IS NULL OR b.is_test = 0)"
   ];
   const params: any[] = [];
 
@@ -2344,13 +2343,13 @@ app.get('/api/businesses', (req, res) => {
   }
 
   if (category && category !== 'all' && category !== 'barcha') {
-    whereClauses.push("(c.slug = ? OR c.id = ?)");
-    params.push(category, category);
+    whereClauses.push("(c.slug = ? OR c.id = ? OR b.category_id = ?)");
+    params.push(category, category, category);
   }
 
   if (city && city !== 'all' && city !== 'barcha') {
-    whereClauses.push("(ct.id = ? OR ct.name LIKE ?)");
-    params.push(city, `%${city}%`);
+    whereClauses.push("(ct.id = ? OR ct.name LIKE ? OR b.city_id = ?)");
+    params.push(city, `%${city}%`, city);
   }
 
   const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
@@ -2368,14 +2367,15 @@ app.get('/api/businesses', (req, res) => {
     SELECT 
       b.id, b.name, b.slug, b.district, b.address, b.phone, b.description, b.logo_url, b.is_verified, b.is_sponsored,
       b.latitude, b.longitude,
-      c.name as category_name, c.slug as category_slug,
-      ct.name as city_name,
+      COALESCE(c.name, 'Boshqa xizmatlar') as category_name, 
+      COALESCE(c.slug, 'boshqa') as category_slug,
+      COALESCE(ct.name, 'Qarshi') as city_name,
       CASE WHEN COUNT(DISTINCT r.id) > 0 THEN ROUND(AVG(r.rating), 1) ELSE NULL END as avg_rating,
       COUNT(DISTINCT r.id) as review_count,
       COUNT(DISTINCT s.id) as service_count
     FROM businesses b
-    JOIN categories c ON b.category_id = c.id
-    JOIN cities ct ON b.city_id = ct.id
+    LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+    LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
     LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
     LEFT JOIN reviews r ON b.id = r.business_id AND r.is_moderated = 1
     ${whereSql}
@@ -2387,8 +2387,8 @@ app.get('/api/businesses', (req, res) => {
   const countQuery = `
     SELECT COUNT(DISTINCT b.id) as total
     FROM businesses b
-    JOIN categories c ON b.category_id = c.id
-    JOIN cities ct ON b.city_id = ct.id
+    LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+    LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
     LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
     ${whereSql}
   `;
@@ -4899,8 +4899,20 @@ app.post(['/api/operator/queue/accept', '/operator/queue/accept'], requireAuth, 
 app.post(['/api/operator/queue/cancel', '/operator/queue/cancel'], requireAuth, async (req, res) => {
   try {
     const { entry_id } = req.body;
+    const user = (req as any).user;
     const entry = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entry_id) as any;
     if (!entry) return res.status(404).json({ error: 'Navbat topilmadi' });
+
+    // Role and ownership check: business owner, staff, member, customer themselves, or admin
+    const isOwner = db.prepare('SELECT id FROM businesses WHERE id = ? AND owner_id = ?').get(entry.business_id, user.id);
+    const isStaff = db.prepare('SELECT id FROM staff WHERE business_id = ? AND user_id = ?').get(entry.business_id, user.id);
+    const isMember = db.prepare('SELECT id FROM business_memberships WHERE business_id = ? AND user_id = ?').get(entry.business_id, user.id);
+    const isCustomerOwner = entry.user_id === user.id || (user.phone && entry.customer_phone === user.phone);
+    const isAdmin = ['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(user.role);
+
+    if (!isOwner && !isStaff && !isMember && !isCustomerOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Ushbu navbatni bekor qilishga ruxsat berilmagan' });
+    }
 
     db.prepare("UPDATE queue_entries SET status = 'CANCELLED' WHERE id = ?").run(entry_id);
 
@@ -4931,6 +4943,15 @@ app.post(['/api/operator/queue/complete', '/operator/queue/complete'], requireAu
       if (b) bId = b.id;
     }
     if (!bId) return res.status(400).json({ error: 'Biznes ID talab qilinadi' });
+
+    const isOwner = db.prepare('SELECT id FROM businesses WHERE id = ? AND owner_id = ?').get(bId, user.id);
+    const isStaff = db.prepare('SELECT id FROM staff WHERE business_id = ? AND user_id = ?').get(bId, user.id);
+    const isMember = db.prepare('SELECT id FROM business_memberships WHERE business_id = ? AND user_id = ?').get(bId, user.id);
+    const isAdmin = ['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(user.role);
+
+    if (!isOwner && !isStaff && !isMember && !isAdmin) {
+      return res.status(403).json({ error: 'Ushbu biznes navbatini boshqarish huquqingiz yo‘q' });
+    }
 
     const result = executeCompleteCustomerAtomic({
       businessId: bId,
@@ -6335,6 +6356,19 @@ app.post('/api/businesses/register', (req, res) => {
     bizId
   );
 
+  // Create owner membership record
+  const membershipId = 'bm-' + crypto.randomUUID().slice(0, 8);
+  db.prepare(`
+    INSERT OR IGNORE INTO business_memberships (id, business_id, user_id, role, permissions)
+    VALUES (?, ?, ?, 'OWNER', '["ALL"]')
+  `).run(membershipId, bizId, user.id);
+
+  // Set as active business for the owner
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(`active_biz_${user.id}`, bizId);
+
   // Add customized business hours
   const activeDays = Array.isArray(work_days) ? work_days.map(Number) : [1, 2, 3, 4, 5, 6];
   for (let day = 0; day <= 6; day++) {
@@ -7567,6 +7601,12 @@ function getAdminForTelegramUser(chatId: string, telegramUserId?: string): any |
     LIMIT 1
   `).get(chatId, tgId) as any;
   if (adminUser) return adminUser;
+
+  const envSuperAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (envSuperAdminIds.includes(tgId) || envSuperAdminIds.includes(chatId)) {
+    const adminRecord = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get() as any;
+    if (adminRecord) return adminRecord;
+  }
 
   const anyUser = db.prepare(`
     SELECT * FROM users 
@@ -8914,25 +8954,28 @@ async function processTelegramUpdate(update: any): Promise<void> {
 
     // --- B. ADMIN COMMANDS & AUTH ---
     if (text.startsWith('/admin_auth ')) {
-      const secret = text.replace('/admin_auth ', '').trim();
-      if (secret === 'admin123' || secret === 'navbatbor2026' || secret === 'superadmin') {
+      const inputPass = text.replace('/admin_auth ', '').trim();
+      const envPass = process.env.ADMIN_PASSWORD || 'Mansur1105';
+      const envSuperAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+      const isConfiguredAdmin = envSuperAdminIds.includes(chatId) || envSuperAdminIds.includes(telegramUserId);
+
+      if ((inputPass === envPass || inputPass === 'Mansur1105.') && (isConfiguredAdmin || adminUser)) {
         const { user: authedUser } = authenticateTelegramUser(chatId, {
           first_name: from.first_name,
           last_name: from.last_name,
           username: from.username
         });
-        db.prepare("UPDATE users SET role = 'SUPER_ADMIN', telegram_chat_id = ?, telegram_username = ? WHERE id = ?")
-          .run(chatId, from.username || null, authedUser.id);
+        db.prepare("UPDATE users SET telegram_chat_id = ?, telegram_username = ? WHERE id = 'usr-admin'").run(chatId, from.username || null);
         setTelegramUserMode(chatId, 'ADMIN');
-        const updatedAdmin = db.prepare('SELECT * FROM users WHERE id = ?').get(authedUser.id) as any;
+        const updatedAdmin = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get() as any;
         await sendTelegramAlert({
           chatId,
-          message: `👑 <b>TABRIKLAYMIZ!</b>\nSiz muvaffaqiyatli SUPER_ADMIN etib tasdiqlandingiz.\nBarcha platforma boshqaruvi Telegram orqali ochildi!`
+          message: `👑 <b>TABRIKLAYMIZ!</b>\nSiz muvaffaqiyatli Super Admin sifatida tasdiqlandingiz.\nBarcha platforma boshqaruvi Telegram orqali ochildi!`
         });
         await sendTelegramAdminPanel(chatId, updatedAdmin);
         return;
       } else {
-        await sendTelegramAlert({ chatId, message: '❌ Noto‘g‘ri ma‘muriy maxfiy kalit.' });
+        await sendTelegramAlert({ chatId, message: '⛔️ Ruxsat berilmagan yoki noto‘g‘ri parol. Super Admin huquqi faqat vakolatli ma’mur uchun ochiq.' });
         return;
       }
     }
@@ -10463,6 +10506,7 @@ app.post('/api/admin/business-applications/:id/reject', requireAuth, requireRole
 // Telegram Long Polling Background Service (Guarantees incoming updates in dev/preview/production)
 let telegramPollingActive = false;
 let telegramUpdateOffset = 0;
+export let lastCustomerPollTime = 0;
 
 async function startTelegramPolling() {
   const token = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
@@ -10514,6 +10558,7 @@ async function startTelegramPolling() {
   async function pollLoop() {
     if (!telegramPollingActive) return;
     try {
+      lastCustomerPollTime = Date.now();
       const resp = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${telegramUpdateOffset}&timeout=15`, {
         signal: AbortSignal.timeout(25000)
       });
@@ -10548,6 +10593,36 @@ async function startTelegramPolling() {
 
   pollLoop();
 }
+
+// Watchdog supervisor: automatically recovers customer and business bots if network freezes
+setInterval(() => {
+  const now = Date.now();
+  if (telegramPollingActive && lastCustomerPollTime > 0 && now - lastCustomerPollTime > 60000) {
+    console.warn('[Telegram Watchdog] Customer poller appears idle, restarting loop...');
+    lastCustomerPollTime = now;
+    startTelegramPolling().catch(e => console.error('[Watchdog Error]:', e));
+  }
+  if (lastBusinessPollTime > 0 && now - lastBusinessPollTime > 60000 && process.env.BUSINESS_BOT_TOKEN) {
+    console.warn('[Business Watchdog] Business poller appears idle, restarting loop...');
+    startBusinessBotPolling(db).catch(e => console.error('[Watchdog Error]:', e));
+  }
+}, 30000);
+
+// Keep-alive self-ping for Render free tier to prevent 15-minute container spindown
+setInterval(async () => {
+  try {
+    const urlsToPing: string[] = [`http://127.0.0.1:${PORT}/api/health`];
+    const extUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
+    if (extUrl && extUrl.startsWith('http') && !extUrl.includes('your-domain.com')) {
+      urlsToPing.push(`${extUrl.replace(/\/$/, '')}/api/health`);
+    }
+    for (const u of urlsToPing) {
+      try {
+        await fetch(u, { signal: AbortSignal.timeout(10000) });
+      } catch (e) {}
+    }
+  } catch (err) {}
+}, 9 * 60 * 1000);
 
 // Start customer bot and business bot polling after boot
 setTimeout(startTelegramPolling, 2000);
@@ -11816,7 +11891,31 @@ app.get('/api/admin/promotions', requireAuth, requireRole(['ADMIN']), (req, res)
 });
 
 app.get('/api/admin/users', requireAuth, requireRole(['ADMIN']), (req, res) => {
-  const users = db.prepare('SELECT id, name, email, phone, role, status, created_at FROM users ORDER BY created_at DESC LIMIT 50').all();
+  const { q, role, status } = req.query as any;
+  let sql = 'SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_username, created_at FROM users';
+  const clauses: string[] = [];
+  const params: any[] = [];
+
+  if (q && String(q).trim()) {
+    const pattern = `%${String(q).trim()}%`;
+    clauses.push('(name LIKE ? OR email LIKE ? OR phone LIKE ? OR telegram_username LIKE ? OR id LIKE ?)');
+    params.push(pattern, pattern, pattern, pattern, pattern);
+  }
+  if (role && role !== 'all' && role !== 'barcha') {
+    clauses.push('role = ?');
+    params.push(role);
+  }
+  if (status && status !== 'all' && status !== 'barcha') {
+    clauses.push('status = ?');
+    params.push(status);
+  }
+
+  if (clauses.length > 0) {
+    sql += ' WHERE ' + clauses.join(' AND ');
+  }
+  sql += ' ORDER BY created_at DESC LIMIT 200';
+
+  const users = db.prepare(sql).all(...params);
   res.json(users);
 });
 

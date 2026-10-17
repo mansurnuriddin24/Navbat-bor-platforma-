@@ -678,7 +678,10 @@ export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBo
   ];
 
   if (role === 'SUPER_ADMIN') {
-    keyboard.unshift([{ text: '👑 Super Admin Boshqaruvi' }]);
+    keyboard.unshift([
+      { text: '📝 Kutayotgan arizalar' },
+      { text: '👑 Super Admin Boshqaruvi' }
+    ]);
   }
 
   return {
@@ -1974,6 +1977,95 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
   if (auth.role === 'BUSINESS_OWNER' || auth.role === 'MANAGER' || auth.role === 'EMPLOYEE' || auth.role === 'SUPER_ADMIN') {
     const biz = auth.business;
 
+    // Super Admin: Pending Applications & Approvals
+    if (auth.role === 'SUPER_ADMIN' && (
+      text.startsWith('📝 Kutayotgan arizalar') || 
+      text === '👑 Super Admin Boshqaruvi' || 
+      text === '/arizalar' || 
+      text === '/pending'
+    )) {
+      const pendingApps = db.prepare(`
+        SELECT a.*, COALESCE(c.name, 'Boshqa xizmatlar') as category_name, COALESCE(ct.name, 'Qarshi') as city_name
+        FROM business_applications a
+        LEFT JOIN categories c ON (a.category_id = c.id OR a.category_id = c.slug)
+        LEFT JOIN cities ct ON (a.city_id = ct.id OR a.city_id = ct.name)
+        WHERE a.status = 'PENDING'
+        ORDER BY a.created_at DESC LIMIT 10
+      `).all() as any[];
+
+      const pendingBizs = db.prepare(`
+        SELECT b.*, COALESCE(u.name, 'Noma’lum') as owner_name, COALESCE(u.phone, b.phone) as owner_phone,
+               COALESCE(c.name, 'Boshqa xizmatlar') as category_name, COALESCE(ct.name, 'Qarshi') as city_name
+        FROM businesses b
+        LEFT JOIN users u ON b.owner_id = u.id
+        LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+        LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
+        WHERE b.status = 'PENDING'
+        ORDER BY b.created_at DESC LIMIT 10
+      `).all() as any[];
+
+      const totalPending = pendingApps.length + pendingBizs.length;
+      if (totalPending === 0) {
+        await sendBusinessBotMessage(
+          chatId,
+          `✅ <b>Hozirda tasdiq kutayotgan biznes arizalari mavjud emas.</b>\nBarcha muassasalar ko‘rib chiqilgan va faol.`,
+          { replyMarkup: getBusinessDashboardKeyboard(lang, 'SUPER_ADMIN') }
+        );
+        return;
+      }
+
+      await sendBusinessBotMessage(
+        chatId,
+        `📝 <b>Tasdiq Kutayotgan Biznes Arizalari (${totalPending} ta):</b>\n━━━━━━━━━━━━━━━━\nQuyidagi har bir muassasani ko‘rib chiqib, 1 bosishda tasdiqlashingiz yoki rad etishingiz mumkin:`
+      );
+
+      for (const app of pendingApps) {
+        const appCard = 
+          `🏢 <b>${app.business_name}</b>\n` +
+          `📂 Kategoriya: <b>${app.category_name}</b>\n` +
+          `📍 Manzil: <b>${app.city_name}, ${app.district ? `${app.district}, ` : ''}${app.address}</b>\n` +
+          `👤 Rahbar: <b>${app.owner_name}</b>\n` +
+          `📞 Telefon: <b>${app.owner_phone}</b>\n` +
+          `📅 Topshirildi: <b>${app.created_at}</b>\n` +
+          `⏳ Holati: <b>TASDIQLASH KUTILMOQDA</b>`;
+
+        await sendBusinessBotMessage(chatId, appCard, {
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Tasdiqlash', callback_data: `admin_appr_${app.id}` },
+                { text: '❌ Rad etish', callback_data: `admin_rejc_${app.id}` }
+              ]
+            ]
+          }
+        });
+      }
+
+      for (const pb of pendingBizs) {
+        if (pendingApps.some(a => a.created_business_id === pb.id || a.id === pb.id)) continue;
+        const bizCard = 
+          `🏢 <b>${pb.name}</b>\n` +
+          `📂 Kategoriya: <b>${pb.category_name}</b>\n` +
+          `📍 Manzil: <b>${pb.city_name}, ${pb.district ? `${pb.district}, ` : ''}${pb.address}</b>\n` +
+          `👤 Rahbar: <b>${pb.owner_name}</b>\n` +
+          `📞 Telefon: <b>${pb.owner_phone || pb.phone}</b>\n` +
+          `📅 Topshirildi: <b>${pb.created_at}</b>\n` +
+          `⏳ Holati: <b>TASDIQLASH KUTILMOQDA</b>`;
+
+        await sendBusinessBotMessage(chatId, bizCard, {
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Tasdiqlash', callback_data: `admin_approve_biz_${pb.id}` },
+                { text: '❌ Rad etish', callback_data: `admin_reject_biz_${pb.id}` }
+              ]
+            ]
+          }
+        });
+      }
+      return;
+    }
+
     // 1. 📊 Statistika
     if (text === t(lang, 'btn_menu_stats') || text === '📊 Statistika' || text === '📊 Статистика' || text === '/stats' || text === '/dashboard') {
       if (!biz) {
@@ -2432,71 +2524,103 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   // 6. SUPER ADMIN APPROVAL
-  if (data.startsWith('admin_appr_')) {
-    const appId = data.replace('admin_appr_', '');
+  if (data.startsWith('admin_appr_') || data.startsWith('admin_approve_biz_')) {
+    const appIdOrBizId = data.replace('admin_appr_', '').replace('admin_approve_biz_', '');
     if (auth.role !== 'SUPER_ADMIN') {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
       return;
     }
 
-    const app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(appId) as any;
+    let app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(appIdOrBizId) as any;
     if (!app) {
-      await sendBusinessBotMessage(cbChatId, '⚠️ Ariza topilmadi.');
+      app = db.prepare('SELECT * FROM business_applications WHERE created_business_id = ?').get(appIdOrBizId) as any;
+    }
+
+    if (app) {
+      const result = approveBusinessApplication(db, app.id, cbUserId, auth.user?.id);
+      if (!result.success) {
+        await sendBusinessBotMessage(cbChatId, `⚠️ ${result.message}`);
+        return;
+      }
+
+      await sendBusinessBotMessage(
+        cbChatId,
+        `✅ <b>Ariza ma’qullandi!</b>\n\n🏢 <b>${app.business_name}</b> muvaffaqiyatli tasdiqlandi va saytda faol holatga keltirildi.`
+      );
+
+      if (app.telegram_chat_id && app.telegram_chat_id !== 'web_onboard') {
+        await sendBusinessBotMessage(
+          app.telegram_chat_id,
+          t('uz', 'app_approved_owner', { biz_name: app.business_name }),
+          { replyMarkup: getBusinessDashboardKeyboard('uz', 'BUSINESS_OWNER') }
+        ).catch(() => {});
+      }
       return;
     }
 
-    const result = approveBusinessApplication(db, appId, cbUserId, auth.user?.id);
-    if (!result.success) {
-      await sendBusinessBotMessage(cbChatId, `⚠️ ${result.message}`);
+    // Direct business approval if not in applications
+    const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(appIdOrBizId) as any;
+    if (biz) {
+      db.prepare(`
+        UPDATE businesses 
+        SET status = 'APPROVED', is_verified = 1, subscription_status = 'TRIAL', is_trial = 1, trial_used = 1
+        WHERE id = ?
+      `).run(biz.id);
+      await sendBusinessBotMessage(
+        cbChatId,
+        `✅ <b>Ariza ma’qullandi!</b>\n\n🏢 <b>${biz.name}</b> muvaffaqiyatli tasdiqlandi va saytda faol holatga keltirildi.`
+      );
       return;
     }
 
-    await sendBusinessBotMessage(
-      cbChatId,
-      `✅ <b>Ariza ma’qullandi!</b>\n\n🏢 <b>${app.business_name}</b> muvaffaqiyatli yaratildi va egasiga bildirishnoma yuborildi.`
-    );
-
-    await sendBusinessBotMessage(
-      app.telegram_chat_id,
-      t('uz', 'app_approved_owner', { biz_name: app.business_name }),
-      { replyMarkup: getBusinessDashboardKeyboard('uz', 'BUSINESS_OWNER') }
-    );
+    await sendBusinessBotMessage(cbChatId, '⚠️ Ariza yoki biznes topilmadi.');
     return;
   }
 
   // 7. SUPER ADMIN REJECTION
-  if (data.startsWith('admin_rejc_')) {
-    const appId = data.replace('admin_rejc_', '');
+  if (data.startsWith('admin_rejc_') || data.startsWith('admin_reject_biz_')) {
+    const appIdOrBizId = data.replace('admin_rejc_', '').replace('admin_reject_biz_', '');
     if (auth.role !== 'SUPER_ADMIN') {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
       return;
     }
 
-    const app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(appId) as any;
+    let app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(appIdOrBizId) as any;
     if (!app) {
-      await sendBusinessBotMessage(cbChatId, '⚠️ Ariza topilmadi.');
+      app = db.prepare('SELECT * FROM business_applications WHERE created_business_id = ?').get(appIdOrBizId) as any;
+    }
+
+    if (app) {
+      const result = rejectBusinessApplication(db, app.id, cbUserId, 'Ma’lumotlar tekshiruvdan o‘tmadi', auth.user?.id);
+      if (!result.success) {
+        await sendBusinessBotMessage(cbChatId, `⚠️ ${result.message}`);
+        return;
+      }
+      await sendBusinessBotMessage(
+        cbChatId,
+        `❌ <b>Ariza rad etildi.</b>\n\n🏢 ${app.business_name} arizachisiga rad javobi yetkazildi.`
+      );
+      if (app.telegram_chat_id && app.telegram_chat_id !== 'web_onboard') {
+        await sendBusinessBotMessage(
+          app.telegram_chat_id,
+          t('uz', 'app_rejected_owner', {
+            biz_name: app.business_name,
+            reason: 'Ma’lumotlar tekshiruvdan o‘tmadi yoki telefon raqamga bog‘lanib bo‘lmadi.'
+          }),
+          { replyMarkup: getGuestKeyboard('uz', false) }
+        ).catch(() => {});
+      }
       return;
     }
 
-    const result = rejectBusinessApplication(db, appId, cbUserId, 'Ma’lumotlar tekshiruvdan o‘tmadi', auth.user?.id);
-    if (!result.success) {
-      await sendBusinessBotMessage(cbChatId, `⚠️ ${result.message}`);
+    const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(appIdOrBizId) as any;
+    if (biz) {
+      db.prepare("UPDATE businesses SET status = 'REJECTED' WHERE id = ?").run(biz.id);
+      await sendBusinessBotMessage(cbChatId, `❌ <b>${biz.name}</b> arizasi rad etildi.`);
       return;
     }
 
-    await sendBusinessBotMessage(
-      cbChatId,
-      `❌ <b>Ariza rad etildi.</b>\n\n🏢 ${app.business_name} arizachisiga rad javobi yetkazildi.`
-    );
-
-    await sendBusinessBotMessage(
-      app.telegram_chat_id,
-      t('uz', 'app_rejected_owner', {
-        biz_name: app.business_name,
-        reason: 'Ma’lumotlar tekshiruvdan o‘tmadi yoki telefon raqamga bog‘lanib bo‘lmadi.'
-      }),
-      { replyMarkup: getGuestKeyboard('uz', false) }
-    );
+    await sendBusinessBotMessage(cbChatId, '⚠️ Ariza topilmadi.');
     return;
   }
 

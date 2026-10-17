@@ -319,6 +319,8 @@ try { db.exec(`ALTER TABLE businesses ADD COLUMN queue_mode TEXT DEFAULT 'HYBRID
 try { db.exec(`ALTER TABLE businesses ADD COLUMN buffer_before_minutes INTEGER DEFAULT 0;`); } catch(e){}
 try { db.exec(`ALTER TABLE businesses ADD COLUMN buffer_after_minutes INTEGER DEFAULT 5;`); } catch(e){}
 try { db.exec(`ALTER TABLE businesses ADD COLUMN max_skip_count INTEGER DEFAULT 2;`); } catch(e){}
+try { db.exec(`ALTER TABLE businesses ADD COLUMN is_test INTEGER DEFAULT 0;`); } catch(e){}
+try { db.exec(`ALTER TABLE businesses ADD COLUMN is_temporarily_closed INTEGER DEFAULT 0;`); } catch(e){}
 
 try { db.exec(`ALTER TABLE services ADD COLUMN queue_mode TEXT DEFAULT 'HYBRID';`); } catch(e){}
 try { db.exec(`ALTER TABLE services ADD COLUMN buffer_minutes INTEGER DEFAULT 0;`); } catch(e){}
@@ -1941,6 +1943,85 @@ function seedDatabase() {
     `).run();
   }
 
+  // 5. Ensure "Nasaf dental" application exists in PENDING status for Super Admin approval
+  try {
+    const existingNasaf = db.prepare("SELECT * FROM businesses WHERE name LIKE '%Nasaf%'").get() as any;
+    const existingApp = db.prepare("SELECT * FROM business_applications WHERE business_name LIKE '%Nasaf%'").get() as any;
+
+    if (!existingNasaf) {
+      const bizId = 'biz-nasaf-dental';
+      const trialExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
+      // Ensure owner user exists
+      let owner = db.prepare("SELECT * FROM users WHERE phone LIKE '%908862540%' OR email = 'mansurnuriddin24@gmail.com'").get() as any;
+      const ownerId = owner?.id || 'usr-abfcb7fe';
+      if (!owner) {
+        db.prepare(`
+          INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id)
+          VALUES (?, 'Nuriddinov Mansur', 'mansurnuriddin24@gmail.com', '+998908862540', ?, 'BUSINESS_OWNER', 'ACTIVE', '5564730141')
+        `).run(ownerId, hashPassword('Mansur1105'));
+      }
+
+      db.prepare(`
+        INSERT OR IGNORE INTO businesses (
+          id, owner_id, name, slug, category_id, city_id, district, address, phone, description,
+          status, is_verified, is_sponsored, subscription_plan_code, subscription_expires_at,
+          subscription_status, is_trial, trial_used, trial_started_at, telegram_chat_id, telegram_user_id
+        ) VALUES (
+          ?, ?, 'Nasaf dental', 'nasaf-dental-777', 'cat-stomatology', 'city-qarshi', 'Markaz',
+          'Qarshi shahri, Mustaqillik ko‘chasi 14', '+998908862540', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
+          'PENDING', 0, 0, 'PRO', ?, 'TRIAL', 1, 1, CURRENT_TIMESTAMP, '5564730141', '5564730141'
+        )
+      `).run(bizId, ownerId, trialExpiry);
+
+      db.prepare(`
+        INSERT OR REPLACE INTO business_applications (
+          id, telegram_user_id, telegram_chat_id, telegram_username,
+          business_name, owner_name, owner_phone, category_id, city_id,
+          district, address, description, status, created_business_id, created_at, reviewed_at
+        ) VALUES (
+          'app-nasaf-dental', '5564730141', '5564730141', 'mansur_0511',
+          'Nasaf dental', 'Nuriddinov Mansur', '+998908862540', 'cat-stomatology', 'city-qarshi',
+          'Markaz', 'Qarshi shahri, Mustaqillik ko‘chasi 14', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
+          'PENDING', ?, CURRENT_TIMESTAMP, NULL
+        )
+      `).run(bizId);
+
+      db.prepare(`
+        INSERT OR IGNORE INTO business_memberships (id, business_id, user_id, role, permissions)
+        VALUES ('bm-nasaf-1', ?, ?, 'OWNER', '["ALL"]')
+      `).run(bizId, ownerId);
+
+      db.prepare(`
+        INSERT OR IGNORE INTO services (id, business_id, name, duration_minutes, price_uzs, description, is_active)
+        VALUES ('srv-nasaf-1', ?, 'Tish ko‘rigi va konsultatsiya', 30, 50000, 'Malakali shifokor ko‘rigi va maslahati', 1)
+      `).run(bizId);
+
+      db.prepare(`
+        INSERT OR IGNORE INTO staff (id, business_id, name, title, phone, is_active, telegram_chat_id)
+        VALUES ('stf-nasaf-1', ?, 'Dr. Nuriddinov Mansur', 'Bosh shifokor-stomatolog', '+998908862540', 1, '5564730141')
+      `).run(bizId);
+
+      db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-nasaf-1', 'srv-nasaf-1')`).run();
+    } else if (existingNasaf.name === 'Nasaf Qarshi ' && (!existingApp || existingApp.status !== 'APPROVED')) {
+      db.prepare("UPDATE businesses SET name = 'Nasaf dental', category_id = 'cat-stomatology', status = 'PENDING', is_verified = 0 WHERE id = ?").run(existingNasaf.id);
+      db.prepare(`
+        INSERT OR REPLACE INTO business_applications (
+          id, telegram_user_id, telegram_chat_id, telegram_username,
+          business_name, owner_name, owner_phone, category_id, city_id,
+          district, address, description, status, created_business_id, created_at, reviewed_at
+        ) VALUES (
+          'app-nasaf-dental', '5564730141', '5564730141', 'mansur_0511',
+          'Nasaf dental', 'Nuriddinov Mansur', '+998908862540', 'cat-stomatology', 'city-qarshi',
+          'Markaz', 'Qarshi shahri, Mustaqillik ko‘chasi 14', 'Zamonaviy stomatologiya va tish davolash xizmatlari',
+          'PENDING', ?, CURRENT_TIMESTAMP, NULL
+        )
+      `).run(existingNasaf.id);
+    }
+  } catch (nasafErr: any) {
+    console.error('[Seed Nasaf Error]:', nasafErr.message);
+  }
+
   console.log('[Seed] Core platform ready for production!');
 }
 
@@ -2323,126 +2404,146 @@ app.get('/api/public-stats', (req, res) => {
 });
 
 app.get('/api/businesses', (req, res) => {
-  const { q, category, city, sort = 'rating', page = '1', limit = '12', lat, lng } = req.query;
-  const offset = (Math.max(1, parseInt(page as string) || 1) - 1) * parseInt(limit as string);
+  try {
+    const { q, category, city, sort = 'rating', page = '1', limit = '12', lat, lng } = req.query;
+    const offset = (Math.max(1, parseInt(page as string) || 1) - 1) * parseInt(limit as string);
 
-  const userLat = lat ? parseFloat(lat as string) : null;
-  const userLng = lng ? parseFloat(lng as string) : null;
-  const hasUserCoords = userLat !== null && !isNaN(userLat) && userLng !== null && !isNaN(userLng);
+    const userLat = lat ? parseFloat(lat as string) : null;
+    const userLng = lng ? parseFloat(lng as string) : null;
+    const hasUserCoords = userLat !== null && !isNaN(userLat) && userLng !== null && !isNaN(userLng);
 
-  let whereClauses = [
-    "(b.status = 'APPROVED' OR b.status = 'ACTIVE')",
-    "(b.is_test IS NULL OR b.is_test = 0)"
-  ];
-  const params: any[] = [];
+    let whereClauses = [
+      "(b.status = 'APPROVED' OR b.status = 'ACTIVE')"
+    ];
+    // Check if is_test column exists safely
+    try {
+      db.prepare("SELECT is_test FROM businesses LIMIT 1").get();
+      whereClauses.push("(b.is_test IS NULL OR b.is_test = 0)");
+    } catch(e) {}
 
-  if (q) {
-    whereClauses.push("(b.name LIKE ? OR b.description LIKE ? OR b.address LIKE ? OR s.name LIKE ?)");
-    const pattern = `%${q}%`;
-    params.push(pattern, pattern, pattern, pattern);
-  }
+    const params: any[] = [];
 
-  if (category && category !== 'all' && category !== 'barcha') {
-    whereClauses.push("(c.slug = ? OR c.id = ? OR b.category_id = ?)");
-    params.push(category, category, category);
-  }
-
-  if (city && city !== 'all' && city !== 'barcha') {
-    whereClauses.push("(ct.id = ? OR ct.name LIKE ? OR b.city_id = ?)");
-    params.push(city, `%${city}%`, city);
-  }
-
-  const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
-
-  let orderSql = 'ORDER BY b.is_sponsored DESC, (CASE WHEN COUNT(DISTINCT r.id) > 0 THEN AVG(r.rating) ELSE 0 END) DESC, b.is_verified DESC, b.created_at DESC';
-  if (sort === 'reviews') {
-    orderSql = 'ORDER BY b.is_sponsored DESC, COUNT(DISTINCT r.id) DESC, b.is_verified DESC';
-  } else if (sort === 'newest') {
-    orderSql = 'ORDER BY b.is_sponsored DESC, b.created_at DESC';
-  } else if (sort === 'name') {
-    orderSql = 'ORDER BY b.is_sponsored DESC, b.name ASC';
-  }
-
-  const query = `
-    SELECT 
-      b.id, b.name, b.slug, b.district, b.address, b.phone, b.description, b.logo_url, b.is_verified, b.is_sponsored,
-      b.latitude, b.longitude,
-      COALESCE(c.name, 'Boshqa xizmatlar') as category_name, 
-      COALESCE(c.slug, 'boshqa') as category_slug,
-      COALESCE(ct.name, 'Qarshi') as city_name,
-      CASE WHEN COUNT(DISTINCT r.id) > 0 THEN ROUND(AVG(r.rating), 1) ELSE NULL END as avg_rating,
-      COUNT(DISTINCT r.id) as review_count,
-      COUNT(DISTINCT s.id) as service_count
-    FROM businesses b
-    LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
-    LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
-    LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
-    LEFT JOIN reviews r ON b.id = r.business_id AND r.is_moderated = 1
-    ${whereSql}
-    GROUP BY b.id
-    ${orderSql}
-    LIMIT ? OFFSET ?
-  `;
-
-  const countQuery = `
-    SELECT COUNT(DISTINCT b.id) as total
-    FROM businesses b
-    LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
-    LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
-    LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
-    ${whereSql}
-  `;
-
-  const rows = db.prepare(query).all(...params, parseInt(limit as string), offset) as any[];
-  const total = (db.prepare(countQuery).get(...params) as any)?.total || 0;
-
-  let enrichedRows = rows.map((b: any) => {
-    const hoursInfo = getTashkentBusinessHours(b.id);
-    const isOpen = hoursInfo.isOpen;
-    const nextAvailable = hoursInfo.message;
-
-    const queueCount = (db.prepare("SELECT count(*) as count FROM queue_entries WHERE business_id = ? AND status IN ('WAITING', 'CALLED')").get(b.id) as any)?.count || 0;
-    const isRecommended = (!b.is_sponsored && b.is_verified && ((b.avg_rating && b.avg_rating >= 4.5) || b.review_count > 0)) ? 1 : 0;
-
-    let distanceKm: number | null = null;
-    if (hasUserCoords && b.latitude != null && b.longitude != null) {
-      distanceKm = calculateHaversineDistanceKm(userLat!, userLng!, Number(b.latitude), Number(b.longitude));
+    if (q) {
+      whereClauses.push("(b.name LIKE ? OR b.description LIKE ? OR b.address LIKE ? OR s.name LIKE ?)");
+      const pattern = `%${q}%`;
+      params.push(pattern, pattern, pattern, pattern);
     }
 
-    return {
-      ...b,
-      latitude: b.latitude != null ? Number(b.latitude) : null,
-      longitude: b.longitude != null ? Number(b.longitude) : null,
-      distance_km: distanceKm,
-      avg_rating: b.avg_rating !== null ? Number(b.avg_rating) : null,
-      is_open: isOpen,
-      working_hours: hoursInfo.hoursText,
-      status_text: hoursInfo.statusText,
-      next_available: nextAvailable,
-      active_queue_count: queueCount,
-      is_recommended: isRecommended
-    };
-  });
+    if (category && category !== 'all' && category !== 'barcha') {
+      whereClauses.push("(c.slug = ? OR c.id = ? OR b.category_id = ?)");
+      params.push(category, category, category);
+    }
 
-  // Sort by nearest distance if requested
-  if ((sort === 'nearby' || sort === 'distance') && hasUserCoords) {
-    enrichedRows.sort((a, b) => {
-      // Prioritize sponsored businesses slightly or sort purely by distance
-      if (a.is_sponsored !== b.is_sponsored) return b.is_sponsored - a.is_sponsored;
-      const distA = a.distance_km ?? 999999;
-      const distB = b.distance_km ?? 999999;
-      return distA - distB;
+    if (city && city !== 'all' && city !== 'barcha') {
+      whereClauses.push("(ct.id = ? OR ct.name LIKE ? OR b.city_id = ?)");
+      params.push(city, `%${city}%`, city);
+    }
+
+    const whereSql = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+
+    let orderSql = 'ORDER BY b.is_sponsored DESC, (CASE WHEN COUNT(DISTINCT r.id) > 0 THEN AVG(r.rating) ELSE 0 END) DESC, b.is_verified DESC, b.created_at DESC';
+    if (sort === 'reviews') {
+      orderSql = 'ORDER BY b.is_sponsored DESC, COUNT(DISTINCT r.id) DESC, b.is_verified DESC';
+    } else if (sort === 'newest') {
+      orderSql = 'ORDER BY b.is_sponsored DESC, b.created_at DESC';
+    } else if (sort === 'name') {
+      orderSql = 'ORDER BY b.is_sponsored DESC, b.name ASC';
+    }
+
+    const query = `
+      SELECT 
+        b.id, b.name, b.slug, b.district, b.address, b.phone, b.description, b.logo_url, b.is_verified, b.is_sponsored,
+        b.latitude, b.longitude,
+        COALESCE(c.name, 'Boshqa xizmatlar') as category_name, 
+        COALESCE(c.slug, 'boshqa') as category_slug,
+        COALESCE(ct.name, 'Qarshi') as city_name,
+        CASE WHEN COUNT(DISTINCT r.id) > 0 THEN ROUND(AVG(r.rating), 1) ELSE NULL END as avg_rating,
+        COUNT(DISTINCT r.id) as review_count,
+        COUNT(DISTINCT s.id) as service_count
+      FROM businesses b
+      LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+      LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
+      LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
+      LEFT JOIN reviews r ON b.id = r.business_id AND r.is_moderated = 1
+      ${whereSql}
+      GROUP BY b.id
+      ${orderSql}
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(DISTINCT b.id) as total
+      FROM businesses b
+      LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+      LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
+      LEFT JOIN services s ON b.id = s.business_id AND s.is_active = 1
+      ${whereSql}
+    `;
+
+    const rows = db.prepare(query).all(...params, parseInt(limit as string), offset) as any[];
+    const total = (db.prepare(countQuery).get(...params) as any)?.total || 0;
+
+    let enrichedRows = rows.map((b: any) => {
+      let hoursInfo = { isOpen: false, statusText: 'Yopiq', hoursText: '09:00 - 18:00', message: 'Biznes yopiq' };
+      try {
+        hoursInfo = getTashkentBusinessHours(b.id);
+      } catch (e) {}
+
+      let queueCount = 0;
+      try {
+        queueCount = (db.prepare("SELECT count(*) as count FROM queue_entries WHERE business_id = ? AND status IN ('WAITING', 'CALLED')").get(b.id) as any)?.count || 0;
+      } catch (e) {}
+
+      const isRecommended = (!b.is_sponsored && b.is_verified && ((b.avg_rating && b.avg_rating >= 4.5) || b.review_count > 0)) ? 1 : 0;
+
+      let distanceKm: number | null = null;
+      if (hasUserCoords && b.latitude != null && b.longitude != null) {
+        distanceKm = calculateHaversineDistanceKm(userLat!, userLng!, Number(b.latitude), Number(b.longitude));
+      }
+
+      return {
+        ...b,
+        latitude: b.latitude != null ? Number(b.latitude) : null,
+        longitude: b.longitude != null ? Number(b.longitude) : null,
+        distance_km: distanceKm,
+        avg_rating: b.avg_rating !== null ? Number(b.avg_rating) : null,
+        is_open: hoursInfo.isOpen,
+        working_hours: hoursInfo.hoursText,
+        status_text: hoursInfo.statusText,
+        next_available: hoursInfo.message,
+        active_queue_count: queueCount,
+        is_recommended: isRecommended
+      };
+    });
+
+    // Sort by nearest distance if requested
+    if ((sort === 'nearby' || sort === 'distance') && hasUserCoords) {
+      enrichedRows.sort((a, b) => {
+        if (a.is_sponsored !== b.is_sponsored) return b.is_sponsored - a.is_sponsored;
+        const distA = a.distance_km ?? 999999;
+        const distB = b.distance_km ?? 999999;
+        return distA - distB;
+      });
+    }
+
+    res.json({
+      items: enrichedRows,
+      total,
+      page: parseInt(page as string) || 1,
+      limit: parseInt(limit as string),
+      totalPages: Math.ceil(total / parseInt(limit as string)) || 1,
+      user_coords: hasUserCoords ? { lat: userLat, lng: userLng } : undefined
+    });
+  } catch (err: any) {
+    console.error('[Error in GET /api/businesses]:', err.message);
+    res.json({
+      items: [],
+      total: 0,
+      page: 1,
+      limit: 12,
+      totalPages: 1
     });
   }
-
-  res.json({
-    items: enrichedRows,
-    total,
-    page: parseInt(page as string) || 1,
-    limit: parseInt(limit as string),
-    totalPages: Math.ceil(total / parseInt(limit as string)),
-    user_coords: hasUserCoords ? { lat: userLat, lng: userLng } : undefined
-  });
 });
 
 app.get('/api/businesses/:slug', (req, res) => {
@@ -6328,7 +6429,7 @@ app.post('/api/businesses/register', (req, res) => {
       status, subscription_plan_code, is_verified, is_sponsored, latitude, longitude,
       subscription_expires_at, subscription_status, is_trial, trial_used, trial_started_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', 'PRO', 1, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'PRO', 0, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
   `).run(bizId, user.id, name, slug, category_id, city_id, district || '', address, phone, description || '', finalLat, finalLng, trialExpiryDate, nowIso);
 
   // Also record in business_applications for admin audit and bot synchronization
@@ -6339,7 +6440,7 @@ app.post('/api/businesses/register', (req, res) => {
       business_name, owner_name, owner_phone, category_id, city_id,
       district, address, description, status, created_business_id, created_at, reviewed_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, CURRENT_TIMESTAMP, NULL)
   `).run(
     appId,
     user.telegram_user_id || user.telegram_chat_id || 'web_onboard',
@@ -6421,7 +6522,47 @@ app.post('/api/businesses/register', (req, res) => {
     );
   }
 
-  logAudit(user.id, user.email, 'BUSINESS_REGISTERED', 'BUSINESS', bizId, `Nom: ${name}, 14 kunlik bepul sinov boshlandi`);
+  logAudit(user.id, user.email, 'BUSINESS_REGISTERED', 'BUSINESS', bizId, `Nom: ${name}, Kutilmoqda (PENDING)`);
+
+  // Instant notification to Super Admins via Telegram Bot
+  try {
+    const catRow = db.prepare('SELECT name FROM categories WHERE id = ? OR slug = ?').get(category_id, category_id) as any;
+    const catName = catRow?.name || 'Xizmat sohasi';
+    const cityRow = db.prepare('SELECT name FROM cities WHERE id = ?').get(city_id) as any;
+    const cityName = cityRow?.name || 'Qarshi';
+
+    const adminAlertText = 
+      `🏢 <b>YANGI BIZNES ARIZASI (TASDIQLASH KUTILMOQDA)!</b>\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `🏢 Muassasa: <b>${name}</b>\n` +
+      `👤 Rahbar: <b>${user.name || owner_name}</b>\n` +
+      `📞 Telefon: <b>${owner_phone || phone}</b>\n` +
+      `📍 Manzil: <b>${cityName}, ${district ? `${district}, ` : ''}${address}</b>\n` +
+      `📁 Kategoriya: <b>${catName}</b>\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `<i>Saytda yoki botda ushbu muassasani tasdiqlashingiz mumkin:</i>`;
+
+    const adminKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Tasdiqlash', callback_data: `admin_approve_biz_${bizId}` },
+          { text: '❌ Rad etish', callback_data: `admin_reject_biz_${bizId}` }
+        ]
+      ]
+    };
+
+    const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '5564730141').split(',').map(s => s.trim()).filter(Boolean);
+    for (const adminChatId of superAdminIds) {
+      sendBusinessBotMessage(adminChatId, adminAlertText, { replyMarkup: adminKeyboard }).catch(() => {});
+      sendTelegramAlert({
+        chatId: adminChatId,
+        message: adminAlertText,
+        replyMarkup: adminKeyboard
+      }).catch(() => {});
+    }
+  } catch (tgErr: any) {
+    console.error('[Admin Notification Error]:', tgErr.message);
+  }
 
   res.status(201).json({
     success: true,
@@ -6431,7 +6572,7 @@ app.post('/api/businesses/register', (req, res) => {
       id: bizId, 
       name, 
       slug, 
-      status: 'APPROVED',
+      status: 'PENDING',
       subscription_plan_code: 'PRO',
       subscription_status: 'TRIAL',
       subscription_expires_at: trialExpiryDate,
@@ -6439,7 +6580,7 @@ app.post('/api/businesses/register', (req, res) => {
       trial_used: 1,
       days_left: 14
     },
-    message: 'Biznesingiz muvaffaqiyatli ro‘yxatdan o‘tkazildi va 14 kunlik bepul sinov (PRO tarifi) faollashtirildi!'
+    message: 'Biznesingiz muvaffaqiyatli ro‘yxatdan o‘tkazildi va moderator tasdig‘iga yuborildi!'
   });
 });
 
@@ -7655,12 +7796,18 @@ function getBusinessKeyboard(userRole?: string) {
 }
 
 function getAdminKeyboard() {
+  let pendingCount = 0;
+  try {
+    pendingCount = (db.prepare("SELECT count(*) as count FROM businesses WHERE status = 'PENDING'").get() as any)?.count || 0;
+  } catch (e) {}
+  const pendingLabel = pendingCount > 0 ? `📝 Kutayotgan arizalar (${pendingCount})` : '📝 Kutayotgan arizalar';
+
   return {
     keyboard: [
-      [{ text: '🏢 Barcha bizneslar' }, { text: '👥 Foydalanuvchilar' }],
-      [{ text: '🎫 Jonli navbatlar' }, { text: '📅 Barcha bronlar' }],
-      [{ text: '💳 To‘lovlar va obunalar' }, { text: '💎 Tarif rejalari' }],
-      [{ text: '📊 Tizim statistikasi' }, { text: '🎟 Promokodlar' }],
+      [{ text: pendingLabel }, { text: '🏢 Barcha bizneslar' }],
+      [{ text: '👥 Foydalanuvchilar' }, { text: '🎫 Jonli navbatlar' }],
+      [{ text: '📅 Barcha bronlar' }, { text: '💳 To‘lovlar va obunalar' }],
+      [{ text: '📊 Tizim statistikasi' }, { text: '💎 Tarif rejalari' }],
       [{ text: '💬 Support va murojaatlar' }, { text: '⚙️ Tizim sozlamalari' }],
       [{ text: '🏢 Biznes rejimiga o‘tish' }, { text: '👤 Mijoz rejimiga o‘tish' }]
     ],
@@ -8872,6 +9019,95 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
+    // Admin: Approve / Reject Business Application Callbacks
+    if (cbData && (cbData.startsWith('admin_approve_biz_') || cbData.startsWith('admin_appr_'))) {
+      const bizOrAppId = cbData.replace('admin_approve_biz_', '').replace('admin_appr_', '');
+      const adminUser = getAdminForTelegramUser(cbChatId, cbUserId);
+      if (!adminUser) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Bu amal faqat administratorlar uchun ochiq.' });
+        return;
+      }
+
+      let biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizOrAppId) as any;
+      if (!biz) {
+        const app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(bizOrAppId) as any;
+        if (app && app.created_business_id) {
+          biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(app.created_business_id) as any;
+        }
+      }
+
+      if (!biz) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⚠️ Biznes arizasi topilmadi.' });
+        return;
+      }
+
+      db.prepare(`
+        UPDATE businesses 
+        SET status = 'APPROVED', is_verified = 1, subscription_status = 'TRIAL', is_trial = 1, trial_used = 1
+        WHERE id = ?
+      `).run(biz.id);
+
+      db.prepare(`
+        UPDATE business_applications 
+        SET status = 'APPROVED', reviewed_at = CURRENT_TIMESTAMP
+        WHERE created_business_id = ? OR id = ?
+      `).run(biz.id, bizOrAppId);
+
+      await sendTelegramAlert({
+        chatId: cbChatId,
+        message: `✅ <b>ARIZA TASDIQLANDI!</b>\n━━━━━━━━━━━━━━━━\n🏢 Muassasa: <b>${biz.name}</b>\nHolat: <b>Faol (APPROVED) ✅</b>\n\nMuassasa NavbatBor platformasida ommaviy ko‘rinadi va mijozlar navbat olishi mumkin!`
+      });
+
+      // Send in-app and Telegram notification to owner
+      try {
+        const notifId = 'notif-' + crypto.randomUUID().slice(0, 8);
+        db.prepare('INSERT INTO notifications (id, user_id, title, message, type) VALUES (?, ?, ?, ?, ?)').run(
+          notifId, biz.owner_id, '🎉 Tabriklaymiz! Biznesingiz tasdiqlandi', `"${biz.name}" muassasasi muvaffaqiyatli tasdiqlandi va NavbatBor katalogida ommaviy ko‘rinadi.`, 'BUSINESS_STATUS'
+        );
+
+        const owner = db.prepare('SELECT telegram_chat_id FROM users WHERE id = ?').get(biz.owner_id) as any;
+        const targetChat = biz.telegram_chat_id || owner?.telegram_chat_id;
+        if (targetChat) {
+          sendTelegramAlert({
+            chatId: targetChat,
+            message: `🎉 <b>TABRIKLAYMIZ!</b>\n━━━━━━━━━━━━━━━━\nSizning <b>${biz.name}</b> muassasangiz ma’muriyat tomonidan tasdiqlandi!\n\nEndi saytda va botda mijozlar sizning muassasangizga navbat olishlari mumkin.`
+          }).catch(() => {});
+          sendBusinessBotMessage(
+            targetChat,
+            `🎉 <b>TABRIKLAYMIZ!</b>\n━━━━━━━━━━━━━━━━\nSizning <b>${biz.name}</b> muassasangiz tasdiqlandi va www.navbatbor.uz platformasida faoliyat boshladi!`
+          ).catch(() => {});
+        }
+      } catch (e) {}
+      return;
+    }
+
+    if (cbData && (cbData.startsWith('admin_reject_biz_') || cbData.startsWith('admin_rejc_'))) {
+      const bizOrAppId = cbData.replace('admin_reject_biz_', '').replace('admin_rejc_', '');
+      const adminUser = getAdminForTelegramUser(cbChatId, cbUserId);
+      if (!adminUser) {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Bu amal faqat administratorlar uchun ochiq.' });
+        return;
+      }
+
+      let biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizOrAppId) as any;
+      if (!biz) {
+        const app = db.prepare('SELECT * FROM business_applications WHERE id = ?').get(bizOrAppId) as any;
+        if (app && app.created_business_id) {
+          biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(app.created_business_id) as any;
+        }
+      }
+
+      if (biz) {
+        db.prepare("UPDATE businesses SET status = 'REJECTED' WHERE id = ?").run(biz.id);
+        db.prepare("UPDATE business_applications SET status = 'REJECTED', reviewed_at = CURRENT_TIMESTAMP WHERE created_business_id = ? OR id = ?").run(biz.id, bizOrAppId);
+        await sendTelegramAlert({ chatId: cbChatId, message: `❌ <b>${biz.name}</b> muassasasi arizasi rad etildi.` });
+      } else {
+        db.prepare("UPDATE business_applications SET status = 'REJECTED', reviewed_at = CURRENT_TIMESTAMP WHERE id = ?").run(bizOrAppId);
+        await sendTelegramAlert({ chatId: cbChatId, message: `❌ Ariza rad etildi.` });
+      }
+      return;
+    }
+
     // Default Customer Navigation Callbacks
     if (cbData === 'check_queue' || cbData === 'navbat') {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '/navbat' };
@@ -8981,6 +9217,60 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // Admin Panel Section:
+    if (text.startsWith('📝 Kutayotgan arizalar') || text === '📝 Kutayotgan arizalar' || text === '/arizalar' || text === '/pending_businesses') {
+      if (adminUser) {
+        const pendingBizList = db.prepare(`
+          SELECT b.*, COALESCE(u.name, 'Noma’lum') as owner_name, COALESCE(u.phone, b.phone) as owner_phone,
+                 COALESCE(c.name, 'Boshqa xizmatlar') as category_name, COALESCE(ct.name, 'Qarshi') as city_name
+          FROM businesses b
+          LEFT JOIN users u ON b.owner_id = u.id
+          LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+          LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
+          WHERE b.status = 'PENDING'
+          ORDER BY b.created_at DESC LIMIT 10
+        `).all() as any[];
+
+        if (!pendingBizList || pendingBizList.length === 0) {
+          await sendTelegramAlert({
+            chatId,
+            message: `✅ <b>Hozirda tasdiq kutayotgan biznes arizalari mavjud emas.</b>\nBarcha muassasalar ko‘rib chiqilgan va faol.`,
+            replyMarkup: getAdminKeyboard()
+          });
+          return;
+        }
+
+        await sendTelegramAlert({
+          chatId,
+          message: `📝 <b>Tasdiq Kutayotgan Biznes Arizalari (${pendingBizList.length} ta):</b>\n━━━━━━━━━━━━━━━━\nQuyidagi har bir muassasani to‘g‘ridan-to‘g‘ri tasdiqlashingiz yoki rad etishingiz mumkin:`
+        });
+
+        for (const pb of pendingBizList) {
+          const cardText = 
+            `🏢 <b>${pb.name}</b>\n` +
+            `📂 Soha: <b>${pb.category_name}</b>\n` +
+            `📍 Manzil: <b>${pb.city_name}, ${pb.district ? `${pb.district}, ` : ''}${pb.address}</b>\n` +
+            `👤 Mas’ul: <b>${pb.owner_name}</b>\n` +
+            `📞 Telefon: <b>${pb.owner_phone || pb.phone}</b>\n` +
+            `📅 Sana: <b>${pb.created_at}</b>\n` +
+            `⏳ Holat: <b>MODERATSIYA KUTILMOQDA (PENDING)</b>`;
+
+          await sendTelegramAlert({
+            chatId,
+            message: cardText,
+            replyMarkup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Tasdiqlash', callback_data: `admin_approve_biz_${pb.id}` },
+                  { text: '❌ Rad etish', callback_data: `admin_reject_biz_${pb.id}` }
+                ]
+              ]
+            }
+          });
+        }
+        return;
+      }
+    }
+
     if (text === '🏢 Barcha bizneslar') {
       if (adminUser) {
         const bizList = db.prepare(`
@@ -11503,11 +11793,16 @@ app.get('/api/admin/system-health', requireAuth, requireRole(['ADMIN']), (req, r
 app.get('/api/admin/businesses', requireAuth, requireRole(['ADMIN', 'DISTRICT_ADMIN', 'SUPER_ADMIN']), (req, res) => {
   const user = (req as any).user;
   let query = `
-    SELECT b.*, u.name as owner_name, u.email as owner_email, c.name as category_name, ct.name as city_name
+    SELECT b.*, 
+           COALESCE(u.name, 'Noma’lum') as owner_name, 
+           COALESCE(u.email, '') as owner_email, 
+           COALESCE(u.phone, b.phone) as owner_phone,
+           COALESCE(c.name, 'Boshqa xizmatlar') as category_name, 
+           COALESCE(ct.name, 'Qarshi') as city_name
     FROM businesses b
-    JOIN users u ON b.owner_id = u.id
-    JOIN categories c ON b.category_id = c.id
-    JOIN cities ct ON b.city_id = ct.id
+    LEFT JOIN users u ON b.owner_id = u.id
+    LEFT JOIN categories c ON (b.category_id = c.id OR b.category_id = c.slug)
+    LEFT JOIN cities ct ON (b.city_id = ct.id OR b.city_id = ct.name)
   `;
   const params: any[] = [];
 
@@ -11777,7 +12072,7 @@ app.post('/api/invitations/:token/accept', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/admin/businesses/:id/status', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+app.post('/api/admin/businesses/:id/status', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   const { id } = req.params;
   const { status, is_verified, reason } = req.body;
   const user = (req as any).user;
@@ -11786,7 +12081,26 @@ app.post('/api/admin/businesses/:id/status', requireAuth, requireRole(['ADMIN'])
   if (!biz) return res.status(404).json({ error: 'Biznes topilmadi' });
 
   if (status) {
-    db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run(status, id);
+    if (status === 'APPROVED') {
+      db.prepare(`
+        UPDATE businesses 
+        SET status = 'APPROVED', is_verified = 1, subscription_status = 'TRIAL', is_trial = 1, trial_used = 1
+        WHERE id = ?
+      `).run(id);
+      db.prepare(`
+        UPDATE business_applications 
+        SET status = 'APPROVED', reviewed_at = CURRENT_TIMESTAMP
+        WHERE created_business_id = ? OR id = ?
+      `).run(id, id);
+    } else {
+      db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run(status, id);
+      db.prepare(`
+        UPDATE business_applications 
+        SET status = ?, reviewed_at = CURRENT_TIMESTAMP
+        WHERE created_business_id = ? OR id = ?
+      `).run(status, id, id);
+    }
+
     logAudit(user.id, user.email, 'ADMIN_BUSINESS_STATUS', 'BUSINESS', id, `Status: ${status}${reason ? ` | Sabab: ${reason}` : ''}`);
 
     // In-app notification to business owner
@@ -11816,11 +12130,15 @@ app.post('/api/admin/businesses/:id/status', requireAuth, requireRole(['ADMIN'])
         recipientType: 'BUSINESS',
         recipientId: biz.id,
         message: `📢 <b>NavbatBor: Biznes holati o‘zgardi</b>\n━━━━━━━━━━━━━━━━\n🏢 Muassasa: <b>${biz.name}</b>\nYangi holat: <b>${status}</b>\n${msg}`
-      });
+      }).catch(() => {});
+      sendBusinessBotMessage(
+        targetChat,
+        `📢 <b>NavbatBor: Biznes holati o‘zgardi</b>\n━━━━━━━━━━━━━━━━\n🏢 Muassasa: <b>${biz.name}</b>\nYangi holat: <b>${status}</b>\n${msg}`
+      ).catch(() => {});
     }
   }
 
-  if (is_verified !== undefined) {
+  if (is_verified !== undefined && status !== 'APPROVED') {
     db.prepare('UPDATE businesses SET is_verified = ? WHERE id = ?').run(is_verified ? 1 : 0, id);
     logAudit(user.id, user.email, 'ADMIN_BUSINESS_VERIFIED', 'BUSINESS', id, `Verified: ${is_verified}`);
   }

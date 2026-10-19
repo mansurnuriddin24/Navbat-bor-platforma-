@@ -172,15 +172,21 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         setHasTorch(Boolean(capabilities.torch));
       }
 
+      setCameraStatus('active');
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         videoRef.current.muted = true;
-        await videoRef.current.play();
-        setCameraStatus('active');
-        isScanningRef.current = true;
-        startScanningLoop();
+        try {
+          await videoRef.current.play();
+        } catch (playErr) {
+          console.warn('Video play warning:', playErr);
+        }
       }
+
+      isScanningRef.current = true;
+      startScanningLoop();
     } catch (err: any) {
       if (permissionTimeoutRef.current) {
         clearTimeout(permissionTimeoutRef.current);
@@ -442,6 +448,22 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
     return false;
   };
 
+  // Synchronize stream to video element when active
+  useEffect(() => {
+    if (cameraStatus === 'active' && streamRef.current && videoRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.muted = true;
+        videoRef.current.play().catch((e) => console.warn('Stream play error:', e));
+      }
+      if (!isScanningRef.current) {
+        isScanningRef.current = true;
+        startScanningLoop();
+      }
+    }
+  }, [cameraStatus]);
+
   // Lock body scroll and control lifecycle
   useEffect(() => {
     if (isOpen) {
@@ -576,16 +598,19 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
             <div className="space-y-4">
               {/* Camera Preview Box */}
               <div className="relative aspect-[4/3] sm:aspect-square max-h-[35vh] sm:max-h-[300px] w-full max-w-[340px] mx-auto rounded-2xl overflow-hidden bg-slate-950 shadow-inner flex items-center justify-center">
-                {cameraStatus === 'active' ? (
-                  <>
-                    <video
-                      ref={videoRef}
-                      className="w-full h-full object-cover"
-                      playsInline
-                      muted
-                      autoPlay
-                    />
+                {/* Persistent video element - must never unmount to avoid null ref */}
+                <video
+                  ref={videoRef}
+                  className={`w-full h-full object-cover transition-opacity duration-300 ${
+                    cameraStatus === 'active' ? 'opacity-100' : 'opacity-0 absolute inset-0 pointer-events-none'
+                  }`}
+                  playsInline
+                  muted
+                  autoPlay
+                />
 
+                {cameraStatus === 'active' && (
+                  <>
                     {/* Viewfinder Reticle Overlay */}
                     <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
                       <div className="relative w-48 h-48 sm:w-56 sm:h-56 border-2 border-white/40 rounded-2xl overflow-hidden">
@@ -631,9 +656,21 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
                       </span>
                     </div>
                   </>
-                ) : cameraStatus === 'denied' ? (
-                  /* PERMISSION DENIED UI (Requirement 1) */
-                  <div className="p-6 text-center text-white space-y-3">
+                )}
+
+                {cameraStatus === 'requesting' && (
+                  /* REQUESTING PERMISSION STATE */
+                  <div className="p-6 text-center text-white space-y-3 z-10">
+                    <RefreshCw className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
+                    <p className="text-xs text-slate-300 font-medium">
+                      Kameraga ruxsat so‘ralmoqda...
+                    </p>
+                  </div>
+                )}
+
+                {cameraStatus === 'denied' && (
+                  /* PERMISSION DENIED UI */
+                  <div className="p-6 text-center text-white space-y-3 z-10">
                     <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
                       <Camera className="w-6 h-6" />
                     </div>
@@ -655,9 +692,11 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
                       <span>Qayta urinish</span>
                     </button>
                   </div>
-                ) : cameraStatus === 'unsupported' ? (
-                  /* UNSUPPORTED CAMERA (Requirement 1) */
-                  <div className="p-6 text-center text-white space-y-2">
+                )}
+
+                {cameraStatus === 'unsupported' && (
+                  /* UNSUPPORTED CAMERA */
+                  <div className="p-6 text-center text-white space-y-2 z-10">
                     <Camera className="w-10 h-10 text-slate-500 mx-auto" />
                     <h4 className="text-sm font-bold text-white">
                       Kamerangiz ushbu qurilmada qo‘llab-quvvatlanmaydi.
@@ -666,17 +705,11 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
                       Quyidagi rasm yuklash yoki kod kiritish usullaridan foydalaning.
                     </p>
                   </div>
-                ) : cameraStatus === 'requesting' ? (
-                  /* REQUESTING PERMISSION STATE */
-                  <div className="p-6 text-center text-white space-y-3">
-                    <RefreshCw className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
-                    <p className="text-xs text-slate-300 font-medium">
-                      Kameraga ruxsat so‘ralmoqda...
-                    </p>
-                  </div>
-                ) : (
+                )}
+
+                {cameraStatus === 'error' && (
                   /* OTHER CAMERA ERROR */
-                  <div className="p-6 text-center text-white space-y-3">
+                  <div className="p-6 text-center text-white space-y-3 z-10">
                     <Camera className="w-10 h-10 text-slate-500 mx-auto" />
                     <p className="text-xs text-slate-300">
                       {errorMessage || 'Kameraga ulanishda xatolik'}

@@ -1097,15 +1097,99 @@ export function executeCallNextCustomerInBot(
     const nextWaiting = db.prepare(`
       SELECT q.*, s.name as service_name
       FROM queue_entries q
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status = 'WAITING'
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
       ORDER BY q.joined_at ASC LIMIT 1
     `).get(businessId) as any;
 
     if (!nextWaiting) {
+      // Check today's booked appointments (e.g. booked via website/dashboard/bot)
+      const nextBooking = db.prepare(`
+        SELECT b.*, s.name as service_name, st.name as staff_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        LEFT JOIN staff st ON b.staff_id = st.id
+        WHERE b.business_id = ?
+          AND b.booking_date = date('now', '+5 hours')
+          AND b.status IN ('CONFIRMED', 'PENDING')
+        ORDER BY b.start_time ASC
+        LIMIT 1
+      `).get(businessId) as any;
+
+      if (!nextBooking) {
+        db.exec('COMMIT;');
+        return { success: false, message: 'Bugungi kunga kutayotgan navbatlar yoki bronlar mavjud emas' };
+      }
+
+      // Complete any currently serving live queue entries
+      db.prepare(`
+        UPDATE queue_entries 
+        SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+        WHERE business_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+      `).run(businessId);
+
+      // Mark this booking as IN_SERVICE
+      db.prepare(`
+        UPDATE bookings
+        SET status = 'IN_SERVICE'
+        WHERE id = ?
+      `).run(nextBooking.id);
+
+      // Create a matching entry in queue_entries for TV monitor and SSE live queue
+      const qEntryId = 'qe-bkg-' + nextBooking.id.slice(0, 10);
+      db.prepare(`
+        INSERT INTO queue_entries (
+          id, business_id, service_id, staff_id, customer_name, customer_phone,
+          queue_number, status, joined_at, called_at, called_source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
+        ON CONFLICT(id) DO UPDATE SET status = 'SERVING', called_at = CURRENT_TIMESTAMP
+      `).run(
+        qEntryId,
+        businessId,
+        nextBooking.service_id,
+        nextBooking.staff_id,
+        nextBooking.customer_name,
+        nextBooking.customer_phone || '',
+        nextBooking.booking_number
+      );
+
+      const bookingEntry = {
+        id: qEntryId,
+        booking_id: nextBooking.id,
+        queue_number: nextBooking.booking_number,
+        customer_name: nextBooking.customer_name,
+        customer_phone: nextBooking.customer_phone,
+        service_name: nextBooking.service_name || 'Xizmat',
+        start_time: nextBooking.start_time,
+        status: 'SERVING',
+        is_booking: true
+      };
+
+      logBusinessBotAudit(db, 'CALL_NEXT_BOOKING', actorTgId || 'system', actorUserId, nextBooking.id, {
+        booking_number: nextBooking.booking_number,
+        customer_name: nextBooking.customer_name
+      });
+
       db.exec('COMMIT;');
-      return { success: false, message: 'Navbatda kutayotgan mijoz yo‘q' };
+
+      try {
+        botHooks.broadcastQueueUpdate?.(businessId, {
+          type: 'QUEUE_CALLED',
+          entryId: qEntryId,
+          calledCustomer: bookingEntry,
+          timestamp: Date.now()
+        });
+      } catch (e) {
+        console.error('[broadcastQueueUpdate Error]:', e);
+      }
+
+      return {
+        success: true,
+        entry: bookingEntry,
+        isBooking: true,
+        message: `Bugungi bron navbati chaqirildi: #${nextBooking.booking_number}`
+      };
     }
 
     // Complete any currently serving or called entries
@@ -2095,18 +2179,19 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       if (!biz) return;
       const res = executeCallNextCustomerInBot(db, biz.id, auth.user?.id, tgUserId);
       if (res.success && res.entry) {
+        const isBooking = Boolean(res.entry.is_booking);
         await sendBusinessBotMessage(
           chatId,
           `📢 <b>KEYINGI MIJOZ CHAQIRILDI!</b>\n━━━━━━━━━━━━━━━━\n` +
-          `🎫 Navbat raqami: <b>#${res.entry.queue_number}</b>\n` +
-          `👤 Mijoz: <b>${res.entry.customer_name}</b>\n` +
+          `🎫 ${isBooking ? 'Bron raqami' : 'Navbat raqami'}: <b>#${res.entry.queue_number}</b>\n` +
+          `👤 Mijoz: <b>${res.entry.customer_name}</b>${res.entry.customer_phone ? ` (📞 ${res.entry.customer_phone})` : ''}\n` +
           `🩺 Xizmat: <b>${res.entry.service_name || 'Xizmat'}</b>\n` +
+          (res.entry.start_time ? `⏰ Belgilangan vaqt: <b>${res.entry.start_time}</b>\n` : '') +
           `━━━━━━━━━━━━━━━━\n` +
           `<i>Sayt va TV monitor ekranda jonli yangilandi.</i>`,
           {
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${res.entry.id}` }],
                 [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
                 [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }],
                 [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${res.entry.id}` }],
@@ -2129,7 +2214,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       text === '/current'
     ) {
       if (!biz) return;
-      const currentServing = db.prepare(`
+      let currentServing = db.prepare(`
         SELECT q.*, s.name as service_name
         FROM queue_entries q
         LEFT JOIN services s ON q.service_id = s.id
@@ -2139,14 +2224,42 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         LIMIT 1
       `).get(biz.id) as any;
 
+      if (!currentServing) {
+        const inServiceBooking = db.prepare(`
+          SELECT b.*, s.name as service_name
+          FROM bookings b
+          LEFT JOIN services s ON b.service_id = s.id
+          WHERE b.business_id = ? AND b.status = 'IN_SERVICE'
+            AND b.booking_date = date('now', '+5 hours')
+          ORDER BY b.updated_at DESC, b.start_time ASC
+          LIMIT 1
+        `).get(biz.id) as any;
+
+        if (inServiceBooking) {
+          currentServing = {
+            id: 'qe-bkg-' + inServiceBooking.id.slice(0, 10),
+            booking_id: inServiceBooking.id,
+            queue_number: inServiceBooking.booking_number,
+            customer_name: inServiceBooking.customer_name,
+            customer_phone: inServiceBooking.customer_phone,
+            service_name: inServiceBooking.service_name || 'Xizmat',
+            start_time: inServiceBooking.start_time,
+            status: 'SERVING',
+            is_booking: true
+          };
+        }
+      }
+
       if (currentServing) {
         const isCalled = currentServing.status === 'CALLED';
+        const isBooking = Boolean(currentServing.is_booking);
         await sendBusinessBotMessage(
           chatId,
           `👤 <b>HOZIRGI MIJOZ — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n` +
-          `🎫 Navbat raqami: <b>#${currentServing.queue_number}</b>\n` +
-          `👤 Ism: <b>${currentServing.customer_name}</b>\n` +
+          `🎫 ${isBooking ? 'Bron raqami' : 'Navbat raqami'}: <b>#${currentServing.queue_number}</b>\n` +
+          `👤 Ism: <b>${currentServing.customer_name}</b>${currentServing.customer_phone ? ` (📞 ${currentServing.customer_phone})` : ''}\n` +
           `🩺 Xizmat: <b>${currentServing.service_name || 'Xizmat'}</b>\n` +
+          (currentServing.start_time ? `⏰ Belgilangan vaqt: <b>${currentServing.start_time}</b>\n` : '') +
           `⚡️ Holat: <b>${isCalled ? '🟡 Chaqirilgan (Kutmoqda)' : '🟢 Qabulda (Xizmatda)'}</b>\n` +
           `━━━━━━━━━━━━━━━━`,
           {
@@ -3014,6 +3127,12 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
 
   if (data.startsWith('biz_q_complete_')) {
     const entryId = data.replace('biz_q_complete_', '');
+    if (entryId.startsWith('qe-bkg-')) {
+      const bkgPrefix = entryId.replace('qe-bkg-', '');
+      try {
+        db.prepare("UPDATE bookings SET status = 'COMPLETED' WHERE id LIKE ?").run(`${bkgPrefix}%`);
+      } catch (e) {}
+    }
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
@@ -3033,6 +3152,12 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
 
   if (data.startsWith('biz_q_noshow_') || data.startsWith('biz_q_cancel_')) {
     const entryId = data.replace('biz_q_noshow_', '').replace('biz_q_cancel_', '');
+    if (entryId.startsWith('qe-bkg-')) {
+      const bkgPrefix = entryId.replace('qe-bkg-', '');
+      try {
+        db.prepare("UPDATE bookings SET status = 'CANCELLED' WHERE id LIKE ?").run(`${bkgPrefix}%`);
+      } catch (e) {}
+    }
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));

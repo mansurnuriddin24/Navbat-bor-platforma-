@@ -4697,6 +4697,14 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
     `━━━━━━━━━━━━━━━━\n` +
     `<i>NavbatBor CRM tizimi orqali qabul qilindi.</i>`;
 
+  const bkgCallMarkup = {
+    inline_keyboard: [
+      [
+        { text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${business_id}` }
+      ]
+    ]
+  };
+
   let businessTelegramSent = false;
   if (finalBizChat) {
     try {
@@ -4704,7 +4712,8 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
         chatId: finalBizChat,
         recipientType: 'BUSINESS',
         recipientId: business_id,
-        message: bizMsg
+        message: bizMsg,
+        replyMarkup: bkgCallMarkup
       });
       businessTelegramSent = true;
     } catch(e) {}
@@ -4712,7 +4721,7 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
 
   // Also notify via dedicated Business Bot if owner is registered there
   try {
-    const bBotSent = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizMsg);
+    const bBotSent = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizMsg, { replyMarkup: bkgCallMarkup });
     if (bBotSent) businessTelegramSent = true;
   } catch(e) {}
 
@@ -8287,20 +8296,114 @@ async function handleTelegramDirectCallNext(chatId: string, telegramUserId: stri
     return;
   }
 
-  const nextWaiting = db.prepare(`
+  let nextWaiting = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
   `).get(biz.id) as any;
 
   if (!nextWaiting) {
+    const nextBooking = db.prepare(`
+      SELECT b.*, s.name as service_name, st.name as staff_name
+      FROM bookings b
+      LEFT JOIN services s ON b.service_id = s.id
+      LEFT JOIN staff st ON b.staff_id = st.id
+      WHERE b.business_id = ?
+        AND b.booking_date = date('now', '+5 hours')
+        AND b.status IN ('CONFIRMED', 'PENDING')
+      ORDER BY b.start_time ASC
+      LIMIT 1
+    `).get(biz.id) as any;
+
+    if (!nextBooking) {
+      await sendTelegramAlert({
+        chatId,
+        message: `ℹ️ <b>Hozircha kutayotgan navbatlar yoki bronlar yo‘q!</b>\n\n<b>${biz.name}</b> uchun bugungi qabul bo‘sh. Yangi mijoz kelishi bilan darhol bildirishnoma yuboriladi.`,
+        replyMarkup: getBusinessKeyboard(bizInfo.user?.role || bizInfo.role)
+      });
+      return;
+    }
+
+    // Complete any currently serving live queue entries
+    db.prepare(`
+      UPDATE queue_entries 
+      SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+      WHERE business_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+    `).run(biz.id);
+
+    // Mark this booking as IN_SERVICE
+    db.prepare(`
+      UPDATE bookings
+      SET status = 'IN_SERVICE'
+      WHERE id = ?
+    `).run(nextBooking.id);
+
+    // Create a matching entry in queue_entries for TV monitor and SSE live queue
+    const qEntryId = 'qe-bkg-' + nextBooking.id.slice(0, 10);
+    db.prepare(`
+      INSERT INTO queue_entries (
+        id, business_id, service_id, staff_id, customer_name, customer_phone,
+        queue_number, status, joined_at, called_at, called_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
+      ON CONFLICT(id) DO UPDATE SET status = 'SERVING', called_at = CURRENT_TIMESTAMP
+    `).run(
+      qEntryId,
+      biz.id,
+      nextBooking.service_id,
+      nextBooking.staff_id,
+      nextBooking.customer_name,
+      nextBooking.customer_phone || '',
+      nextBooking.booking_number
+    );
+
+    const bookingEntry = {
+      id: qEntryId,
+      booking_id: nextBooking.id,
+      queue_number: nextBooking.booking_number,
+      customer_name: nextBooking.customer_name,
+      customer_phone: nextBooking.customer_phone,
+      service_name: nextBooking.service_name || 'Xizmat',
+      start_time: nextBooking.start_time,
+      status: 'SERVING',
+      is_booking: true
+    };
+
+    broadcastQueueUpdate(biz.id, {
+      type: 'QUEUE_CALLED',
+      called: bookingEntry,
+      source: 'TELEGRAM',
+      timestamp: new Date().toISOString()
+    });
+
+    const successText = `📢 <b>KEYINGI MIJOZ CHAQIRILDI!</b>\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `🎫 Bron raqami: <b>#${nextBooking.booking_number}</b>\n` +
+      `👤 Mijoz: <b>${nextBooking.customer_name}</b>\n` +
+      `📞 Tel: <b>${nextBooking.customer_phone || 'Kiritilmagan'}</b>\n` +
+      `🩺 Xizmat: <b>${nextBooking.service_name || 'Xizmat'}</b>\n` +
+      `⏰ Belgilangan vaqt: <b>${nextBooking.start_time}</b>\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `<i>Sayt va TV monitor ekranda jonli yangilandi.</i>`;
+
     await sendTelegramAlert({
       chatId,
-      message: `ℹ️ <b>Hozircha kutayotgan mijozlar yo‘q!</b>\n\n<b>${biz.name}</b> uchun navbat bo‘sh. Yangi mijoz kelishi bilan darhol bildirishnoma yuboriladi.`,
-      replyMarkup: getBusinessKeyboard(bizInfo.user?.role || bizInfo.role)
+      recipientType: 'BUSINESS',
+      recipientId: biz.id,
+      message: successText,
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${qEntryId}` },
+            { text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${qEntryId}` }
+          ],
+          [
+            { text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }
+          ]
+        ]
+      }
     });
     return;
   }

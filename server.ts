@@ -7896,6 +7896,50 @@ function getAdminForTelegramUser(chatId: string, telegramUserId?: string): any |
   return null;
 }
 
+// Safe Telegram Booking Session Drafts (prevents >64 bytes callback_data overflow)
+try {
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS telegram_booking_drafts (
+      chat_id TEXT PRIMARY KEY,
+      biz_id TEXT NOT NULL,
+      srv_id TEXT NOT NULL,
+      staff_id TEXT,
+      date TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+} catch (e) {}
+
+function saveTelegramBookingDraft(chatId: string, data: { bizId: string; srvId: string; staffId?: string; date?: string }) {
+  try {
+    db.prepare(`
+      INSERT INTO telegram_booking_drafts (chat_id, biz_id, srv_id, staff_id, date, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(chat_id) DO UPDATE SET
+        biz_id = excluded.biz_id,
+        srv_id = excluded.srv_id,
+        staff_id = COALESCE(excluded.staff_id, telegram_booking_drafts.staff_id),
+        date = COALESCE(excluded.date, telegram_booking_drafts.date),
+        updated_at = CURRENT_TIMESTAMP
+    `).run(chatId, data.bizId, data.srvId, data.staffId || null, data.date || null);
+  } catch (e) {}
+}
+
+function getTelegramBookingDraft(chatId: string): { bizId: string; srvId: string; staffId?: string; date?: string } | null {
+  try {
+    const row = db.prepare('SELECT * FROM telegram_booking_drafts WHERE chat_id = ?').get(chatId) as any;
+    if (!row) return null;
+    return {
+      bizId: row.biz_id,
+      srvId: row.srv_id,
+      staffId: row.staff_id,
+      date: row.date
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // --- TELEGRAM 3-MODE KEYBOARD & NAVIGATION SYSTEM ---
 
 function getCustomerKeyboard(userRole?: string, hasBusiness?: boolean) {
@@ -8255,15 +8299,14 @@ async function processTelegramUpdate(update: any): Promise<void> {
     const cbUserId = String(cb.from?.id || cbChatId);
     const cbData = cb.data;
 
-    // Fast answer to callback query
+    // Fast non-blocking answer to callback query (instantly stops button spinner)
     if (token && cb.id) {
-      try {
-        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ callback_query_id: cb.id })
-        });
-      } catch (e) {}
+      fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id }),
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => {});
     }
 
     // A. Confirm Next Customer Callback
@@ -8882,6 +8925,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
       const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizId) as any;
       const srv = db.prepare('SELECT * FROM services WHERE id = ?').get(srvId) as any;
       if (biz && srv) {
+        saveTelegramBookingDraft(cbChatId, { bizId, srvId });
         let staffList = db.prepare(`
           SELECT s.* FROM staff s
           LEFT JOIN staff_services ss ON s.id = ss.staff_id
@@ -8908,7 +8952,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         }
 
         const buttons: any[][] = staffList.map(st => ([
-          { text: `👨‍⚕️ ${st.name} (${st.position || 'Mutaxassis'})`, callback_data: `bkg_stf:${bizId}:${srvId}:${st.id}` }
+          { text: `👨‍⚕️ ${st.name} (${st.position || 'Mutaxassis'})`, callback_data: `bkg_stf:${st.id}` }
         ]));
         buttons.push([{ text: '🔙 Orqaga (Xizmatlar)', callback_data: `q_biz_${bizId}` }]);
 
@@ -8923,7 +8967,23 @@ async function processTelegramUpdate(update: any): Promise<void> {
 
     // Customer: Pick date for booking
     if (cbData && cbData.startsWith('bkg_stf:')) {
-      const [, bizId, srvId, staffId] = cbData.split(':');
+      const parts = cbData.split(':');
+      let bizId = '', srvId = '', staffId = '';
+      if (parts.length === 2) {
+        staffId = parts[1];
+        const draft = getTelegramBookingDraft(cbChatId);
+        if (draft) { bizId = draft.bizId; srvId = draft.srvId; }
+      } else {
+        [, bizId, srvId, staffId] = parts;
+      }
+      if (!bizId || !srvId) {
+        const draft = getTelegramBookingDraft(cbChatId);
+        if (draft) { bizId = draft.bizId; srvId = draft.srvId; }
+      }
+      if (bizId && srvId && staffId) {
+        saveTelegramBookingDraft(cbChatId, { bizId, srvId, staffId });
+      }
+
       const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizId) as any;
       const srv = db.prepare('SELECT * FROM services WHERE id = ?').get(srvId) as any;
       const st = db.prepare('SELECT * FROM staff WHERE id = ?').get(staffId) as any;
@@ -8943,7 +9003,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         ];
 
         const buttons: any[][] = dateOptions.map(opt => ([
-          { text: `📅 ${opt.label}`, callback_data: `bkg_dt:${bizId}:${srvId}:${staffId}:${opt.date}` }
+          { text: `📅 ${opt.label}`, callback_data: `bkg_dt:${opt.date}` }
         ]));
         buttons.push([{ text: '🔙 Mutaxassisni o‘zgartirish', callback_data: `bkg_srv:${bizId}:${srvId}` }]);
 
@@ -8952,13 +9012,45 @@ async function processTelegramUpdate(update: any): Promise<void> {
           message: `👨‍⚕️ Mutaxassis: <b>${st.name}</b>\n🩺 Xizmat: <b>${srv.name}</b>\n\n👇 Qabul sanasini tanlang:`,
           replyMarkup: { inline_keyboard: buttons }
         });
+      } else {
+        await sendTelegramAlert({
+          chatId: cbChatId,
+          message: `⚠️ Bronlash sessiyasi eskirgan. Iltimos, xizmatni qaytadan tanlang:`,
+          replyMarkup: {
+            inline_keyboard: [[{ text: '🔙 Qaytadan tanlash', callback_data: 'navbat_olish' }]]
+          }
+        });
       }
       return;
     }
 
     // Customer: Pick time slot for booking
     if (cbData && cbData.startsWith('bkg_dt:')) {
-      const [, bizId, srvId, staffId, date] = cbData.split(':');
+      const parts = cbData.split(':');
+      let bizId = '', srvId = '', staffId = '', date = '';
+      if (parts.length === 2) {
+        date = parts[1];
+        const draft = getTelegramBookingDraft(cbChatId);
+        if (draft) {
+          bizId = draft.bizId;
+          srvId = draft.srvId;
+          staffId = draft.staffId || '';
+        }
+      } else {
+        [, bizId, srvId, staffId, date] = parts;
+      }
+      if (!bizId || !srvId || !staffId) {
+        const draft = getTelegramBookingDraft(cbChatId);
+        if (draft) {
+          bizId = bizId || draft.bizId;
+          srvId = srvId || draft.srvId;
+          staffId = staffId || draft.staffId || '';
+        }
+      }
+      if (bizId && srvId && staffId && date) {
+        saveTelegramBookingDraft(cbChatId, { bizId, srvId, staffId, date });
+      }
+
       const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizId) as any;
       const srv = db.prepare('SELECT * FROM services WHERE id = ?').get(srvId) as any;
       const st = db.prepare('SELECT * FROM staff WHERE id = ?').get(staffId) as any;
@@ -8971,9 +9063,9 @@ async function processTelegramUpdate(update: any): Promise<void> {
           const reasonMsg = slotData.reason || 'Ushbu kunda bo‘sh vaqtlar qolmagan';
           const buttons: any[][] = [];
           if (slotData.suggested_date) {
-            buttons.push([{ text: `👉 ${formatDateUz(slotData.suggested_date)} kunini ko‘rish`, callback_data: `bkg_dt:${bizId}:${srvId}:${staffId}:${slotData.suggested_date}` }]);
+            buttons.push([{ text: `👉 ${formatDateUz(slotData.suggested_date)} kunini ko‘rish`, callback_data: `bkg_dt:${slotData.suggested_date}` }]);
           }
-          buttons.push([{ text: '🔙 Boshqa sana tanlash', callback_data: `bkg_stf:${bizId}:${srvId}:${staffId}` }]);
+          buttons.push([{ text: '🔙 Boshqa sana tanlash', callback_data: `bkg_stf:${staffId}` }]);
 
           await sendTelegramAlert({
             chatId: cbChatId,
@@ -8986,19 +9078,28 @@ async function processTelegramUpdate(update: any): Promise<void> {
         const buttons: any[][] = [];
         let currentRow: any[] = [];
         for (const slot of slots.slice(0, 16)) {
-          currentRow.push({ text: `⏰ ${slot}`, callback_data: `bkg_slot:${bizId}:${srvId}:${staffId}:${date}:${slot}` });
+          // Compact callback_data: strictly 14 bytes (bkg_slot:09:30), well under Telegram 64-byte limit
+          currentRow.push({ text: `⏰ ${slot}`, callback_data: `bkg_slot:${slot}` });
           if (currentRow.length === 4) {
             buttons.push(currentRow);
             currentRow = [];
           }
         }
         if (currentRow.length > 0) buttons.push(currentRow);
-        buttons.push([{ text: '🔙 Sanani o‘zgartirish', callback_data: `bkg_stf:${bizId}:${srvId}:${staffId}` }]);
+        buttons.push([{ text: '🔙 Sanani o‘zgartirish', callback_data: `bkg_stf:${staffId}` }]);
 
         await sendTelegramAlert({
           chatId: cbChatId,
           message: `📅 <b>${formatDateUz(date)}</b> kuni uchun bo‘sh vaqtlar:\n👨‍⚕️ Mutaxassis: <b>${st.name}</b>\n🩺 Xizmat: <b>${srv.name}</b>\n\n👇 Qabul soatini tanlang:`,
           replyMarkup: { inline_keyboard: buttons }
+        });
+      } else {
+        await sendTelegramAlert({
+          chatId: cbChatId,
+          message: `⚠️ Bronlash sessiyasi eskirgan. Iltimos, xizmatni qaytadan tanlang:`,
+          replyMarkup: {
+            inline_keyboard: [[{ text: '🔙 Qaytadan tanlash', callback_data: 'navbat_olish' }]]
+          }
         });
       }
       return;
@@ -9007,16 +9108,31 @@ async function processTelegramUpdate(update: any): Promise<void> {
     // Customer: Confirm and create booking
     if (cbData && cbData.startsWith('bkg_slot:')) {
       const parts = cbData.split(':');
-      const bizId = parts[1];
-      const srvId = parts[2];
-      const staffId = parts[3];
-      const date = parts[4];
-      const slot = parts.slice(5).join(':');
+      let bizId = '', srvId = '', staffId = '', date = '', slot = '';
+      if (parts.length === 3) {
+        // Compact: bkg_slot:09:30
+        slot = `${parts[1]}:${parts[2]}`;
+        const draft = getTelegramBookingDraft(cbChatId);
+        if (draft) {
+          bizId = draft.bizId;
+          srvId = draft.srvId;
+          staffId = draft.staffId || '';
+          date = draft.date || '';
+        }
+      } else {
+        // Legacy: bkg_slot:biz:srv:stf:date:09:30
+        bizId = parts[1];
+        srvId = parts[2];
+        staffId = parts[3];
+        date = parts[4];
+        slot = parts.slice(5).join(':');
+      }
+
       const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizId) as any;
       const srv = db.prepare('SELECT * FROM services WHERE id = ?').get(srvId) as any;
       const st = db.prepare('SELECT * FROM staff WHERE id = ?').get(staffId) as any;
 
-      if (biz && srv && st) {
+      if (biz && srv && st && date && slot) {
         const { user: qUser } = authenticateTelegramUser(cbChatId, {
           first_name: cb.from?.first_name,
           last_name: cb.from?.last_name,
@@ -9061,18 +9177,49 @@ async function processTelegramUpdate(update: any): Promise<void> {
               ]
             }
           });
+
+          // Notify Business Owner & Staff
+          const bizOwner = db.prepare('SELECT b.*, u.telegram_chat_id as owner_chat_id FROM businesses b JOIN users u ON b.owner_id = u.id WHERE b.id = ?').get(bizId) as any;
+          const bizChatId = bizOwner?.telegram_chat_id || bizOwner?.owner_chat_id;
+          if (bizChatId) {
+            await sendTelegramAlert({
+              chatId: bizChatId,
+              recipientType: 'BUSINESS',
+              recipientId: bizId,
+              message: `📅 <b>Yangi bron qabul qilindi: #${result.booking.booking_number}</b>\n` +
+                `👤 Mijoz: <b>${custName}</b> (${custPhone || 'Tel yo‘q'})\n` +
+                `🩺 Xizmat: <b>${srv.name}</b>\n` +
+                `👨‍⚕️ Mutaxassis: <b>${st.name}</b>\n` +
+                `⏰ Vaqt: <b>${formatDateUz(date)}, soat ${slot}</b>\n` +
+                `💰 Narxi: <b>${Number(srv.price_uzs).toLocaleString('uz-UZ')} UZS</b>`
+            });
+          }
+
+          broadcastQueueUpdate(bizId, {
+            type: 'BOOKING_CREATED',
+            booking: result.booking,
+            source: 'TELEGRAM',
+            timestamp: new Date().toISOString()
+          });
         } else {
           await sendTelegramAlert({
             chatId: cbChatId,
-            message: `⚠️ <b>Bron qilish amalga oshmadi:</b>\n${result.error || 'Noma’lum xatolik'}\n\nIltimos, boshqa vaqtni tanlab ko‘ring:`,
+            message: `⚠️ <b>Bron qilishda xatolik yuz berdi:</b>\n${result.error || 'Tanlangan vaqt band bo‘lishi mumkin.'}`,
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '🔄 Boshqa vaqt tanlash', callback_data: `bkg_dt:${bizId}:${srvId}:${staffId}:${date}` }],
-                [{ text: '🔙 Bosh menyu', callback_data: 'mode_customer' }]
+                [{ text: '🔙 Boshqa vaqt tanlash', callback_data: `bkg_stf:${staffId}` }]
               ]
             }
           });
         }
+      } else {
+        await sendTelegramAlert({
+          chatId: cbChatId,
+          message: `⚠️ Bronlash ma’lumotlari topilmadi yoki sessiya eskirgan. Iltimos, xizmatni qaytadan tanlang:`,
+          replyMarkup: {
+            inline_keyboard: [[{ text: '🔙 Qaytadan tanlash', callback_data: 'navbat_olish' }]]
+          }
+        });
       }
       return;
     }
@@ -9310,6 +9457,9 @@ async function processTelegramUpdate(update: any): Promise<void> {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '/biznes' };
     } else if (cbData === 'navbat_olish') {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '🎫 Navbat olish' };
+    } else {
+      // Graceful fallback for any unhandled inline button: shows the user main menu
+      update.message = { chat: { id: cbChatId }, from: cb.from, text: '/menu' };
     }
   }
 
@@ -9941,11 +10091,13 @@ async function processTelegramUpdate(update: any): Promise<void> {
     // 🕒 Ish jadvali
     if (text === '🕒 Ish jadvali') {
       if (bizInfo) {
+        const hoursInfo = getTashkentBusinessHours(bizInfo.business.id);
         await sendTelegramAlert({
           chatId,
           message: `🕒 <b>${bizInfo.business.name} — Ish Jadvali:</b>\n━━━━━━━━━━━━━━━━\n` +
             `📅 Ish kunlari: <b>Dushanba — Shanba</b>\n` +
-            `⏰ Ish vaqti: <b>09:00 — 18:00</b> (Asia/Tashkent)\n` +
+            `⏰ Ish vaqti: <b>${hoursInfo.hoursText || '08:30 — 19:30'}</b> (Asia/Tashkent)\n` +
+            `⚡️ Hozirgi holat: <b>${hoursInfo.isOpen ? '🟢 Hozir ochiq' : '🔴 Hozir yopiq'}</b>\n` +
             `📍 Manzil: <b>${bizInfo.business.address || 'Qarshi shahri'}</b>\n` +
             `📞 Bog‘lanish: <b>${bizInfo.business.phone}</b>\n\n` +
             `<i>Belgilangan ish vaqtidan tashqarida mijozlarga avtomatik tarzda «Biznes hozir yopiq» xabari ko‘rsatiladi.</i>`
@@ -10101,26 +10253,25 @@ async function processTelegramUpdate(update: any): Promise<void> {
     // 📍 Yaqin bizneslar
     if (text === '📍 Yaqin bizneslar') {
       const topBiz = db.prepare(`
-        SELECT b.id, b.name, b.address, b.phone, b.slug,
-          COALESCE((SELECT ROUND(AVG(rating), 1) FROM reviews WHERE business_id = b.id AND is_moderated = 1), 4.9) as rating
+        SELECT b.id, b.name, b.address, b.phone, b.slug
         FROM businesses b
         WHERE b.status IN ('ACTIVE', 'APPROVED')
         ORDER BY b.created_at ASC LIMIT 5
       `).all() as any[];
 
-      let yText = `📍 <b>Qarshi Shahridagi Tavsiya Etilgan Muassasalar:</b>\n━━━━━━━━━━━━━━━━\n`;
+      let yText = `📍 <b>Qarshi Shahridagi Muassasalar:</b>\n━━━━━━━━━━━━━━━━\n\n`;
       const buttons: any[][] = [];
       topBiz.forEach((b, idx) => {
-        yText += `<b>${idx + 1}. ${b.name}</b> ⭐ ${b.rating}\n` +
-          `📍 ${b.address || 'Qarshi shahri'}\n` +
-          `📞 ${b.phone}\n\n`;
-        buttons.push([{ text: `🎫 ${b.name} (Navbat olish)`, callback_data: `q_biz_${b.id}` }]);
+        yText += `<b>${idx + 1}. 🏥 ${b.name}</b>\n` +
+          `📍 Manzil: ${b.address || 'Qarshi shahri'}\n` +
+          `📞 Telefon: <b>${b.phone || '+998908862540'}</b>\n\n`;
+        buttons.push([{ text: `🎫 ${b.name} (Navbat / Bron)`, callback_data: `q_biz_${b.id}` }]);
       });
-      buttons.push([{ text: '🚀 Xaritada ko‘rish (Web App)', web_app: { url: appUrl } }]);
+      buttons.push([{ text: '🗺 Xaritada ko‘rish (Mini App)', web_app: { url: `${appUrl}/#map` } }]);
 
       await sendTelegramAlert({
         chatId,
-        message: yText,
+        message: yText + `👇 Xizmat turini ko‘rish uchun bosing:`,
         replyMarkup: { inline_keyboard: buttons }
       });
       return;
@@ -10134,16 +10285,22 @@ async function processTelegramUpdate(update: any): Promise<void> {
         ORDER BY created_at ASC LIMIT 6
       `).all() as any[];
 
-      const buttons: any[][] = bizList.map(b => ([
-        { text: `📅 ${b.name}`, web_app: { url: `${appUrl}/#business/${b.slug}` } }
-      ]));
-      buttons.push([{ text: '📱 Barcha muassasalar katalogi', web_app: { url: `${appUrl}/#catalog` } }]);
+      const buttons: any[][] = [];
+      for (const b of bizList) {
+        buttons.push([
+          { text: `📅 ${b.name} (Botda bron)`, callback_data: `q_biz_${b.id}` }
+        ]);
+        buttons.push([
+          { text: `📱 ${b.name} (Mini App)`, web_app: { url: `${appUrl}/#business/${b.slug}` } }
+        ]);
+      }
+      buttons.push([{ text: '🌐 Barcha xizmatlar katalogi', web_app: { url: `${appUrl}/#catalog` } }]);
 
       await sendTelegramAlert({
         chatId,
         message: `📅 <b>Onlayn Qabulga Yozilish (Bron Qilish):</b>\n━━━━━━━━━━━━━━━━\n` +
           `Navbatda kutmasdan, mutaxassis qabuliga oldindan kun va vaqt tanlab yoziling.\n\n` +
-          `👇 Bron qilish uchun muassasani tanlang:`,
+          `👇 Bron qilish usulini tanlang:`,
         replyMarkup: { inline_keyboard: buttons }
       });
       return;

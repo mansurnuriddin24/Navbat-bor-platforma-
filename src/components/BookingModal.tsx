@@ -178,11 +178,15 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       return;
     }
 
+    const digitsOnly = customerPhone.replace(/\D/g, '');
+    if (digitsOnly.length < 9) {
+      setErrorMessage('Iltimos, telefon raqamingizni to‘liq kiriting (masalan: +998 90 123 45 67)');
+      return;
+    }
+    const cleanPhone = '+998' + digitsOnly.slice(-9);
+
     setSubmitting(true);
     setErrorMessage(null);
-
-    const digitsOnly = customerPhone.replace(/\D/g, '');
-    const cleanPhone = digitsOnly.length >= 9 ? '+998' + digitsOnly.slice(-9) : customerPhone.trim();
 
     try {
       const res = await api.createBooking({

@@ -145,10 +145,18 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     setSavingProfile(true);
     setProfileSuccess('');
     setProfileError('');
+    const digitsOnly = profilePhone.replace(/\D/g, '');
+    if (profilePhone.trim() && profilePhone.trim() !== '+998' && digitsOnly.length < 9) {
+      setProfileError('Iltimos, telefon raqamingizni to‘liq kiriting (9 ta raqam, masalan: +998 90 123 45 67)');
+      setSavingProfile(false);
+      return;
+    }
+    const cleanPhone = digitsOnly.length >= 9 ? '+998' + digitsOnly.slice(-9) : (profilePhone.trim() === '+998' ? '' : profilePhone.trim());
+
     try {
       const res = await api.updateCustomerProfile({
         name: profileName,
-        phone: profilePhone,
+        phone: cleanPhone,
         telegram_chat_id: profileTelegram,
         reminder_30m_enabled: reminder30mEnabled ? 1 : 0,
       });

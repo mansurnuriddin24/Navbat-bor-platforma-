@@ -199,11 +199,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setStoredToken(res.token);
         onSuccess(res.user);
       } else {
+        const digits = phone.replace(/\D/g, '');
+        if (digits.length < 9) {
+          setError('Iltimos, telefon raqamingizni to‘liq kiriting (9 ta raqam, masalan: +998 90 123 45 67)');
+          setLoading(false);
+          return;
+        }
+        const cleanPhone = '+998' + digits.slice(-9);
         const res = await api.register({
           email,
           password,
           name,
-          phone,
+          phone: cleanPhone,
           role: 'CUSTOMER',
         });
         setStoredToken(res.token);
@@ -497,6 +504,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         id="auth-phone-input"
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
+                        placeholder="+998 90 123 45 67"
                         required
                         className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />

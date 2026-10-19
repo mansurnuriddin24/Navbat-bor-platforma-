@@ -65,14 +65,19 @@ export const QueueModal: React.FC<QueueModalProps> = ({
       return;
     }
 
-    if (!name || !phone) {
-      setError('Iltimos, ism va telefon raqamini kiriting');
+    if (!name.trim()) {
+      setError('Iltimos, ismingizni kiriting');
       return;
     }
 
-    setSubmitting(true);
     const digitsOnly = phone.replace(/\D/g, '');
-    const cleanPhone = digitsOnly.length >= 9 ? '+998' + digitsOnly.slice(-9) : phone.trim();
+    if (digitsOnly.length < 9) {
+      setError('Iltimos, telefon raqamingizni to‘liq kiriting (masalan: +998 90 123 45 67)');
+      return;
+    }
+    const cleanPhone = '+998' + digitsOnly.slice(-9);
+
+    setSubmitting(true);
 
     try {
       const res = await api.joinQueue({
@@ -297,6 +302,7 @@ export const QueueModal: React.FC<QueueModalProps> = ({
                 aria-label={t('phone_number')}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                placeholder="+998 90 123 45 67"
                 required
                 className="w-full text-xs border border-slate-300 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
               />

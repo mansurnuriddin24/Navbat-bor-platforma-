@@ -1655,6 +1655,22 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         }
       }
     );
+
+    if (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7) {
+      await sendBusinessBotMessage(
+        chatId,
+        `📱 <b>Telefon raqamingizni ulash:</b>\n\nBiznesingizga kelgan yangi mijozlar va navbat bildirishnomalarini to‘liq olish uchun quyidagi tugmani bosing:`,
+        {
+          replyMarkup: {
+            keyboard: [
+              [{ text: '📱 Telefon raqamni yuborish', request_contact: true }]
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+    }
     return;
   }
 
@@ -1724,6 +1740,22 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
           }
         }
       );
+
+      if (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7) {
+        await sendBusinessBotMessage(
+          chatId,
+          `📱 <b>Telefon raqamingizni ulash:</b>\n\nBiznesingizga kelgan yangi mijozlar va navbat bildirishnomalarini to‘liq olish uchun quyidagi tugmani bosing:`,
+          {
+            replyMarkup: {
+              keyboard: [
+                [{ text: '📱 Telefon raqamni yuborish', request_contact: true }]
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true
+            }
+          }
+        );
+      }
       return;
     }
   }

@@ -120,10 +120,12 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
       setError('Aniq manzilni kiriting');
       return;
     }
-    if (!phone || phone.length < 9) {
-      setError('To‘g‘ri telefon raqamini kiriting');
+    const digitsOnly = phone.replace(/\D/g, '');
+    if (digitsOnly.length < 9) {
+      setError('To‘g‘ri telefon raqamini kiriting (masalan: +998 90 123 45 67)');
       return;
     }
+    const cleanPhone = '+998' + digitsOnly.slice(-9);
 
     const validServices = services.filter(s => s.name.trim() !== '');
     if (validServices.length === 0) {
@@ -163,7 +165,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
         city_id: cityId,
         district,
         address,
-        phone,
+        phone: cleanPhone,
         description,
         open_time: openTime,
         close_time: closeTime,
@@ -172,7 +174,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
         owner_name: ownerName,
         owner_email: ownerEmail,
         owner_password: ownerPassword,
-        owner_phone: phone,
+        owner_phone: cleanPhone,
         latitude: latitude || undefined,
         longitude: longitude || undefined,
       });

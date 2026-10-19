@@ -2563,6 +2563,14 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(400).json({ error: 'Barcha maydonlarni to‘ldiring' });
   }
 
+  let formattedPhone: string | null = null;
+  if (phone) {
+    const digitsOnly = String(phone).replace(/[^0-9]/g, '');
+    if (digitsOnly.length >= 7) {
+      formattedPhone = '+998' + digitsOnly.slice(-9);
+    }
+  }
+
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (existing) {
     return res.status(400).json({ error: 'Ushbu email bilan allaqachon ro‘yxatdan o‘tilgan' });
@@ -2575,8 +2583,26 @@ app.post('/api/auth/register', (req, res) => {
   const hash = hashPassword(password);
 
   db.prepare('INSERT INTO users (id, name, email, phone, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)').run(
-    id, name, email, phone || null, hash, validRole
+    id, name.trim(), email.trim(), formattedPhone, hash, validRole
   );
+
+  // Link any past bookings or queues made with this phone to the new user account
+  if (formattedPhone) {
+    const last9 = formattedPhone.slice(-9);
+    try {
+      db.prepare(`
+        UPDATE bookings 
+        SET customer_id = ? 
+        WHERE (customer_id IS NULL OR customer_id != ?) AND customer_phone IS NOT NULL AND customer_phone LIKE ?
+      `).run(id, id, `%${last9}%`);
+
+      db.prepare(`
+        UPDATE queue_entries 
+        SET customer_id = ? 
+        WHERE (customer_id IS NULL OR customer_id != ?) AND customer_phone IS NOT NULL AND customer_phone LIKE ?
+      `).run(id, id, `%${last9}%`);
+    } catch (e) {}
+  }
 
   const token = 'tok-' + crypto.randomBytes(24).toString('hex');
   db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, id);
@@ -2585,7 +2611,7 @@ app.post('/api/auth/register', (req, res) => {
 
   res.json({
     token,
-    user: { id, name, email, phone, role: validRole, status: 'ACTIVE' }
+    user: { id, name: name.trim(), email: email.trim(), phone: formattedPhone, role: validRole, status: 'ACTIVE' }
   });
 });
 
@@ -3177,6 +3203,13 @@ app.post('/api/bookings', async (req, res) => {
     finalCustName = (req.body.customer_name || user.name || 'Mijoz').trim();
     finalCustPhone = (req.body.customer_phone || user.phone || '').trim();
 
+    const cleanDigits = finalCustPhone.replace(/[^0-9]/g, '');
+    let standardPhone: string | null = null;
+    if (cleanDigits.length >= 7) {
+      standardPhone = '+998' + cleanDigits.slice(-9);
+      finalCustPhone = standardPhone;
+    }
+
     if (isPrivilegedStaff) {
       if (req.body.customer_id && req.body.customer_id !== user.id) {
         const regUser = db.prepare('SELECT id, name, phone FROM users WHERE id = ?').get(req.body.customer_id) as any;
@@ -3193,6 +3226,35 @@ app.post('/api/bookings', async (req, res) => {
             targetCustomerId = matchedUser.id;
           }
         }
+      }
+    } else {
+      // Normal Customer: Save and link phone if user had no phone or incomplete phone
+      if (standardPhone && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7)) {
+        try {
+          db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(standardPhone, user.id);
+          user.phone = standardPhone;
+          const last9 = standardPhone.slice(-9);
+          db.prepare(`
+            UPDATE bookings 
+            SET customer_id = ? 
+            WHERE (customer_id != ? OR customer_id IS NULL) 
+              AND customer_phone IS NOT NULL 
+              AND customer_phone LIKE ?
+          `).run(user.id, user.id, `%${last9}%`);
+          db.prepare(`
+            UPDATE queue_entries 
+            SET customer_id = ? 
+            WHERE (customer_id != ? OR customer_id IS NULL) 
+              AND customer_phone IS NOT NULL 
+              AND customer_phone LIKE ?
+          `).run(user.id, user.id, `%${last9}%`);
+        } catch (e) {}
+      }
+      if (req.body.customer_name && (!user.name || user.name === 'Mijoz' || user.name.startsWith('Telegram '))) {
+        try {
+          db.prepare('UPDATE users SET name = ? WHERE id = ?').run(req.body.customer_name.trim(), user.id);
+          user.name = req.body.customer_name.trim();
+        } catch (e) {}
       }
     }
   } else {
@@ -3352,18 +3414,19 @@ app.post('/api/queue/join', async (req, res) => {
     return res.status(400).json({ error: 'Biznes va xizmatni tanlang' });
   }
 
+  const rawPhone = (customer_phone || '').trim();
+  const digitsOnly = rawPhone.replace(/[^0-9]/g, '');
+  let standardPhone: string | null = null;
+  if (digitsOnly.length >= 7) {
+    standardPhone = '+998' + digitsOnly.slice(-9);
+  }
+
   if (!user) {
     const rawName = (customer_name || 'Mijoz').trim();
-    const rawPhone = (customer_phone || '').trim();
-    if (!rawPhone) {
+    if (!rawPhone || !standardPhone) {
       return res.status(400).json({ error: 'Iltimos, telefon raqamingizni kiriting' });
     }
-    const digitsOnly = rawPhone.replace(/[^0-9]/g, '');
-    if (digitsOnly.length < 7) {
-      return res.status(400).json({ error: 'Telefon raqami noto‘g‘ri kiritildi' });
-    }
     const last9 = digitsOnly.slice(-9);
-    const standardPhone = '+998' + last9;
 
     let matchedUser = db.prepare('SELECT * FROM users WHERE phone LIKE ? LIMIT 1').get(`%${last9}%`) as any;
     if (matchedUser) {
@@ -3383,6 +3446,35 @@ app.post('/api/queue/join', async (req, res) => {
     }
     sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
     db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, user.id);
+  } else {
+    // Authenticated user: Save and link phone if user had no phone or incomplete phone
+    if (standardPhone && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7)) {
+      try {
+        db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(standardPhone, user.id);
+        user.phone = standardPhone;
+        const last9 = standardPhone.slice(-9);
+        db.prepare(`
+          UPDATE bookings 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+        db.prepare(`
+          UPDATE queue_entries 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+      } catch (e) {}
+    }
+    if (customer_name && (!user.name || user.name === 'Mijoz' || user.name.startsWith('Telegram '))) {
+      try {
+        db.prepare('UPDATE users SET name = ? WHERE id = ?').run(customer_name.trim(), user.id);
+        user.name = customer_name.trim();
+      } catch (e) {}
+    }
   }
 
   // Check if business is open (Asia/Tashkent timezone)
@@ -6292,8 +6384,30 @@ app.get('/api/customer/bookings', requireAuth, (req, res) => {
 
   // 1. Fetch user's current phone from DB in case it was updated
   const freshUser = (db.prepare('SELECT id, phone, telegram_chat_id FROM users WHERE id = ?').get(user.id) as any) || user;
-  const cleanPhone = (freshUser.phone || '').replace(/[^0-9]/g, '');
-  const last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
+  let cleanPhone = (freshUser.phone || '').replace(/[^0-9]/g, '');
+  let last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
+
+  // If user phone is not yet set in users table, attempt automatic recovery from recent booking/queue records
+  if (!last9) {
+    try {
+      const phoneRecord = db.prepare(`
+        SELECT customer_phone FROM (
+          SELECT customer_phone, joined_at as ts FROM queue_entries WHERE customer_id = ? AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+          UNION ALL
+          SELECT customer_phone, created_at as ts FROM bookings WHERE customer_id = ? AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+        ) ORDER BY ts DESC LIMIT 1
+      `).get(freshUser.id, freshUser.id) as any;
+      if (phoneRecord?.customer_phone) {
+        const pDigits = phoneRecord.customer_phone.replace(/[^0-9]/g, '');
+        if (pDigits.length >= 7) {
+          const stdP = '+998' + pDigits.slice(-9);
+          db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(stdP, freshUser.id);
+          freshUser.phone = stdP;
+          last9 = stdP.slice(-9);
+        }
+      }
+    } catch (e) {}
+  }
 
   // 2. Auto-link bookings & queue_entries to this customer_id if phone matches
   if (last9) {
@@ -7980,11 +8094,17 @@ function authenticateTelegramUser(tgId: string | null, info: { first_name?: stri
   }
 
   // 2. Look up by phone if provided
-  if (!user && info.phone) {
+  let formattedPhone: string | null = null;
+  if (info.phone) {
     let cleanPhone = info.phone.replace(/[^0-9]/g, '');
-    if (!cleanPhone.startsWith('998') && cleanPhone.length === 9) cleanPhone = '998' + cleanPhone;
-    const formattedPhone = '+' + cleanPhone;
-    user = db.prepare('SELECT * FROM users WHERE phone = ? OR phone LIKE ?').get(formattedPhone, `%${cleanPhone.slice(-9)}%`);
+    if (cleanPhone.length >= 7) {
+      formattedPhone = '+998' + cleanPhone.slice(-9);
+    }
+  }
+
+  if (!user && formattedPhone) {
+    const last9 = formattedPhone.slice(-9);
+    user = db.prepare('SELECT * FROM users WHERE phone = ? OR phone LIKE ?').get(formattedPhone, `%${last9}%`);
   }
 
   // 3. Look up by Telegram username if provided
@@ -8004,9 +8124,6 @@ function authenticateTelegramUser(tgId: string | null, info: { first_name?: stri
     const fullName = info.name || [info.first_name, info.last_name].filter(Boolean).join(' ') || (info.username ? `@${info.username.replace('@', '')}` : `Telegram Mijoz`);
     const email = `tg_${tgIdStr || crypto.randomUUID().slice(0, 8)}@navbatbor.uz`;
     const passwordHash = hashPassword(crypto.randomUUID());
-    let cleanPhone = info.phone ? info.phone.replace(/[^0-9]/g, '') : null;
-    if (cleanPhone && !cleanPhone.startsWith('998') && cleanPhone.length === 9) cleanPhone = '998' + cleanPhone;
-    const formattedPhone = cleanPhone ? '+' + cleanPhone : null;
 
     db.prepare(`
       INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id, telegram_user_id, telegram_username, telegram_first_name)
@@ -8031,18 +8148,44 @@ function authenticateTelegramUser(tgId: string | null, info: { first_name?: stri
       SET telegram_chat_id = COALESCE(telegram_chat_id, ?),
           telegram_user_id = COALESCE(telegram_user_id, ?),
           telegram_username = COALESCE(?, telegram_username),
-          telegram_first_name = COALESCE(?, telegram_first_name),
-          phone = COALESCE(phone, ?)
+          telegram_first_name = COALESCE(?, telegram_first_name)
       WHERE id = ?
     `).run(
       tgIdStr,
       tgIdStr,
       info.username ? info.username.replace('@', '') : null,
       info.first_name || null,
-      info.phone || null,
       user.id
     );
+
+    if (formattedPhone && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7)) {
+      try {
+        db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(formattedPhone, user.id);
+        user.phone = formattedPhone;
+      } catch (e) {}
+    }
     user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  }
+
+  // Auto-recover phone for existing user if missing
+  if (user?.id && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7)) {
+    try {
+      const phoneRecord = db.prepare(`
+        SELECT customer_phone FROM (
+          SELECT customer_phone, joined_at as ts FROM queue_entries WHERE (customer_id = ? OR telegram_chat_id = ?) AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+          UNION ALL
+          SELECT customer_phone, created_at as ts FROM bookings WHERE customer_id = ? AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+        ) ORDER BY ts DESC LIMIT 1
+      `).get(user.id, tgIdStr, user.id) as any;
+      if (phoneRecord?.customer_phone) {
+        const pDigits = phoneRecord.customer_phone.replace(/[^0-9]/g, '');
+        if (pDigits.length >= 7) {
+          const stdP = '+998' + pDigits.slice(-9);
+          db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(stdP, user.id);
+          user.phone = stdP;
+        }
+      }
+    } catch (e) {}
   }
 
   // Link any queue entries for this user
@@ -11143,6 +11286,20 @@ async function processTelegramUpdate(update: any): Promise<void> {
           ]
         }
       });
+
+      if (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7) {
+        await sendTelegramAlert({
+          chatId,
+          message: `📱 <b>Telefon raqamingizni saqlash:</b>\n\nBronlaringiz va navbatlaringiz tarixini to‘liq saqlab qolish hamda eslatmalarni qabul qilish uchun quyidagi tugmani bosing:`,
+          replyMarkup: {
+            keyboard: [
+              [{ text: '📱 Telefon raqamni ulash', request_contact: true }]
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        });
+      }
       return;
     }
 
@@ -11189,6 +11346,20 @@ async function processTelegramUpdate(update: any): Promise<void> {
             ]
           }
         });
+
+        if (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7) {
+          await sendTelegramAlert({
+            chatId,
+            message: `📱 <b>Telefon raqamingizni saqlash:</b>\n\nBronlaringiz va navbatlaringiz tarixini to‘liq saqlab qolish hamda eslatmalarni qabul qilish uchun quyidagi tugmani bosing:`,
+            replyMarkup: {
+              keyboard: [
+                [{ text: '📱 Telefon raqamni ulash', request_contact: true }]
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true
+            }
+          });
+        }
         return;
       }
     }
@@ -14022,6 +14193,14 @@ app.put('/api/customer/profile', requireAuth, (req, res) => {
     ? (reminder_30m_enabled ? 1 : 0) 
     : (telegram_reminders_enabled !== undefined ? (telegram_reminders_enabled ? 1 : 0) : null);
 
+  let formattedPhone: string | null = null;
+  if (phone) {
+    const cleanDigits = String(phone).replace(/[^0-9]/g, '');
+    if (cleanDigits.length >= 7) {
+      formattedPhone = '+998' + cleanDigits.slice(-9);
+    }
+  }
+
   db.prepare(`
     UPDATE users 
     SET name = COALESCE(?, name), 
@@ -14031,14 +14210,15 @@ app.put('/api/customer/profile', requireAuth, (req, res) => {
     WHERE id = ?
   `).run(
     name || null, 
-    phone || null, 
+    formattedPhone, 
     telegram_chat_id !== undefined ? telegram_chat_id : null, 
     remValue,
     user.id
   );
 
-  if (phone) {
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
+  const finalPhone = formattedPhone || (phone ? String(phone).trim() : null);
+  if (finalPhone) {
+    const cleanPhone = finalPhone.replace(/[^0-9]/g, '');
     const last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
     if (last9) {
       try {

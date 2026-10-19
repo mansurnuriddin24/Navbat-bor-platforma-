@@ -194,7 +194,16 @@ export const STRINGS = {
       `🏢 <b>{biz_name}</b> arizasi bosh administrator tomonidan rad etildi.\n` +
       `Sabab: <i>{reason}</i>`,
     
-    // Exact 13 Main Dashboard Menu Buttons Requested by User
+    // Streamlined Essential Business Bot Buttons
+    btn_menu_call_next: `🟢 KEYINGI MIJOZNI CHAQIRISH`,
+    btn_menu_current: `👤 Hozirgi mijoz`,
+    btn_menu_live_queue: `📋 Jonli navbat`,
+    btn_menu_today_bookings: `📅 Bugungi bronlar`,
+    btn_menu_quick_walkin: `➕ Navbatga qo‘shish`,
+    btn_menu_report: `📊 Bugungi hisobot`,
+    btn_menu_web_panel: `🌐 Boshqaruv paneli`,
+
+    // Existing / backward-compatible button keys
     btn_menu_stats: `📊 Statistika`,
     btn_menu_today: `📋 Bugungi navbatlar`,
     btn_menu_queue: `🟢 Jonli navbat`,
@@ -294,7 +303,16 @@ export const STRINGS = {
       `Заявка <b>{biz_name}</b> отклонена администратором.\n` +
       `Причина: <i>{reason}</i>`,
     
-    // 13 Russian Dashboard Menu Buttons
+    // Streamlined Essential Business Bot Buttons
+    btn_menu_call_next: `🟢 ВЫЗВАТЬ СЛЕДУЮЩЕГО`,
+    btn_menu_current: `👤 Текущий клиент`,
+    btn_menu_live_queue: `📋 Живая очередь`,
+    btn_menu_today_bookings: `📅 Брони на сегодня`,
+    btn_menu_quick_walkin: `➕ Добавить в очередь`,
+    btn_menu_report: `📊 Отчет за сегодня`,
+    btn_menu_web_panel: `🌐 Панель управления`,
+
+    // 13 Russian Dashboard Menu Buttons (backward compatibility)
     btn_menu_stats: `📊 Статистика`,
     btn_menu_today: `📋 Очереди на сегодня`,
     btn_menu_queue: `🟢 Живая очередь`,
@@ -667,18 +685,15 @@ export function getGuestKeyboard(lang: BotLanguage, hasPending = false) {
 }
 
 export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBotRole) {
-  const keyboard = [
-    [{ text: t(lang, 'btn_menu_stats') }, { text: t(lang, 'btn_menu_today') }],
-    [{ text: t(lang, 'btn_menu_queue') }, { text: t(lang, 'btn_menu_walkin') }],
-    [{ text: t(lang, 'btn_menu_next') }, { text: t(lang, 'btn_menu_served') }],
-    [{ text: t(lang, 'btn_menu_cancel') }, { text: t(lang, 'btn_menu_staff') }],
-    [{ text: t(lang, 'btn_menu_hours') }, { text: t(lang, 'btn_menu_services') }],
-    [{ text: t(lang, 'btn_menu_notifications') }, { text: t(lang, 'btn_menu_settings') }],
-    [{ text: t(lang, 'btn_menu_help') }]
+  const keyboard: any[][] = [
+    [{ text: t(lang, 'btn_menu_call_next') }],
+    [{ text: t(lang, 'btn_menu_current') }, { text: t(lang, 'btn_menu_live_queue') }],
+    [{ text: t(lang, 'btn_menu_today_bookings') }, { text: t(lang, 'btn_menu_quick_walkin') }],
+    [{ text: t(lang, 'btn_menu_report') }, { text: t(lang, 'btn_menu_web_panel') }]
   ];
 
   if (role === 'SUPER_ADMIN') {
-    keyboard.unshift([
+    keyboard.push([
       { text: '📝 Kutayotgan arizalar' },
       { text: '👑 Super Admin Boshqaruvi' }
     ]);
@@ -2066,118 +2081,17 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       return;
     }
 
-    // 1. 📊 Statistika
-    if (text === t(lang, 'btn_menu_stats') || text === '📊 Statistika' || text === '📊 Статистика' || text === '/stats' || text === '/dashboard') {
-      if (!biz) {
-        await sendBusinessBotMessage(chatId, 'ℹ️ Biznes ma’lumoti topilmadi.');
-        return;
-      }
-      const stats = getBusinessDailyStats(db, biz.id);
-      await sendBusinessBotMessage(
-        chatId,
-        `📊 <b>KUNDALIK VA OYLIK STATISTIKA — ${biz.name}</b>\n` +
-        `━━━━━━━━━━━━━━━━\n` +
-        `🟢 <b>Hozir xizmat ko‘rsatilayotgan:</b> <b>${stats.servingCount} nafar</b>\n` +
-        `⏳ <b>Navbatda kutayotgan:</b> <b>${stats.waitingCount} nafar</b>\n` +
-        `✅ <b>Bugun xizmat ko‘rsatilgan:</b> <b>${stats.completedToday} nafar</b>\n` +
-        `📅 <b>Bugungi qabul bronlari:</b> <b>${stats.bookingsToday} ta</b>\n` +
-        `💰 <b>Kassa tushumi (taxminiy):</b> <b>${stats.revenueEstimate.toLocaleString()} so‘m</b>\n` +
-        `━━━━━━━━━━━━━━━━\n` +
-        `<i>Ma’lumotlar bazadan real vaqtda yangilanadi.</i>`,
-        {
-          replyMarkup: {
-            inline_keyboard: [
-              [{ text: '🔄 Yangilash', callback_data: `biz_refresh_dash_${biz.id}` }],
-              [{ text: '🟢 Jonli navbatga o‘tish', callback_data: `biz_open_queue_${biz.id}` }]
-            ]
-          }
-        }
-      );
-      return;
-    }
-
-    // 2. 📋 Bugungi navbatlar
-    if (text === t(lang, 'btn_menu_today') || text === '📋 Bugungi navbatlar' || text === '📋 Очереди на сегодня' || text === '/today') {
-      if (!biz) return;
-      const todayQueues = db.prepare(`
-        SELECT q.*, s.name as service_name
-        FROM queue_entries q
-        LEFT JOIN services s ON q.service_id = s.id
-        WHERE q.business_id = ?
-          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
-        ORDER BY q.joined_at DESC LIMIT 10
-      `).all(biz.id) as any[];
-
-      const todayBookings = db.prepare(`
-        SELECT b.*, s.name as service_name, st.name as staff_name
-        FROM bookings b
-        LEFT JOIN services s ON b.service_id = s.id
-        LEFT JOIN staff st ON b.staff_id = st.id
-        WHERE b.business_id = ? AND b.booking_date = date('now', '+5 hours')
-        ORDER BY b.start_time ASC LIMIT 6
-      `).all(biz.id) as any[];
-
-      if (todayQueues.length === 0 && todayBookings.length === 0) {
-        await sendBusinessBotMessage(chatId, `📋 <b>${biz.name}</b> uchun bugun hali navbatlar yoki bronlar mavjud emas.`);
-        return;
-      }
-
-      let qMsg = `📋 <b>BUGUNGI NAVBATLAR VA BRONLAR — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n`;
-      if (todayQueues.length > 0) {
-        qMsg += `<b>🎫 Jonli navbatlar:</b>\n`;
-        todayQueues.forEach((q, idx) => {
-          const statusIcon = q.status === 'WAITING' ? '⏳' : q.status === 'CALLED' ? '🟡' : q.status === 'SERVING' ? '🟢' : q.status === 'COMPLETED' ? '✅' : '❌';
-          qMsg += `${idx + 1}. ${statusIcon} <b>#${q.queue_number}</b> — ${q.customer_name} (${q.service_name || 'Xizmat'})\n`;
-        });
-        qMsg += `\n`;
-      }
-
-      if (todayBookings.length > 0) {
-        qMsg += `<b>📅 Qabul bronlari:</b>\n`;
-        todayBookings.forEach((b, idx) => {
-          const bStatusIcon = b.status === 'CONFIRMED' ? '🟢' : b.status === 'PENDING' ? '⏳' : b.status === 'COMPLETED' ? '✅' : '❌';
-          qMsg += `${idx + 1}. ${bStatusIcon} <b>#${b.booking_number}</b> — ${b.customer_name} (${b.start_time}) - ${b.service_name || ''}\n`;
-        });
-      }
-
-      await sendBusinessBotMessage(chatId, qMsg, {
-        replyMarkup: {
-          inline_keyboard: [
-            [{ text: '🟢 Jonli navbat', callback_data: `biz_open_queue_${biz.id}` }],
-            [{ text: '➡️ Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
-          ]
-        }
-      });
-      return;
-    }
-
-    // 3. 🟢 Jonli navbat
-    if (text === t(lang, 'btn_menu_queue') || text === '🟢 Jonli navbat' || text === '🟢 Живая очередь' || text === '/queue') {
-      if (!biz) return;
-      await renderLiveQueueMessage(chatId, biz.id, db, lang);
-      return;
-    }
-
-    // 4. ➕ Jonli navbatga mijoz qo‘shish (Walk-in)
-    if (text === t(lang, 'btn_menu_walkin') || text === '➕ Jonli navbatga mijoz qo‘shish' || text === '➕ Добавить клиента в очередь' || text === '/walkin') {
-      if (!biz) return;
-      setBotUserState(db, chatId, tgUserId, 'WALKIN_NAME', { business_id: biz.id }, lang);
-      await sendBusinessBotMessage(
-        chatId,
-        `➕ <b>Jonli navbatga mijoz qo‘shish:</b>\n\n` +
-        `Mijozning ismini kiriting (masalan: <i>Javohir</i>):`,
-        {
-          replyMarkup: {
-            keyboard: [[{ text: '❌ Bekor qilish' }]],
-            resize_keyboard: true
-          }
-        }
-      );
-      return;
-    }
-
-    // 5. ➡️ Keyingi mijoz
-    if (text === t(lang, 'btn_menu_next') || text === '➡️ Keyingi mijoz' || text === '➡️ Следующий клиент' || text === '/next') {
+    // 0. 🟢 KEYINGI MIJOZNI CHAQIRISH (Primary single-tap action)
+    if (
+      text === t(lang, 'btn_menu_call_next') ||
+      text === '🟢 KEYINGI MIJOZNI CHAQIRISH' ||
+      text === '🟢 Keyingi mijozni chaqirish' ||
+      text === t(lang, 'btn_menu_next') ||
+      text === '➡️ Keyingi mijoz' ||
+      text === '➡️ Следующий клиент' ||
+      text === '🟢 ВЫЗВАТЬ СЛЕДУЮЩЕГО' ||
+      text === '/next'
+    ) {
       if (!biz) return;
       const res = executeCallNextCustomerInBot(db, biz.id, auth.user?.id, tgUserId);
       if (res.success && res.entry) {
@@ -2194,8 +2108,9 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
               inline_keyboard: [
                 [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${res.entry.id}` }],
                 [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
+                [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }],
                 [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${res.entry.id}` }],
-                [{ text: '➡️ Keyingi mijoz', callback_data: `biz_call_next_${biz.id}` }]
+                [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
               ]
             }
           }
@@ -2203,6 +2118,267 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       } else {
         await sendBusinessBotMessage(chatId, `ℹ️ ${res.message || 'Hozircha navbatda kutayotgan mijozlar yo‘q.'}`);
       }
+      return;
+    }
+
+    // 1. 👤 Hozirgi mijoz
+    if (
+      text === t(lang, 'btn_menu_current') ||
+      text === '👤 Hozirgi mijoz' ||
+      text === '👤 Текущий клиент' ||
+      text === '/current'
+    ) {
+      if (!biz) return;
+      const currentServing = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.status IN ('SERVING', 'CALLED', 'IN_SERVICE')
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+        ORDER BY q.called_at DESC, q.joined_at DESC
+        LIMIT 1
+      `).get(biz.id) as any;
+
+      if (currentServing) {
+        const isCalled = currentServing.status === 'CALLED';
+        await sendBusinessBotMessage(
+          chatId,
+          `👤 <b>HOZIRGI MIJOZ — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n` +
+          `🎫 Navbat raqami: <b>#${currentServing.queue_number}</b>\n` +
+          `👤 Ism: <b>${currentServing.customer_name}</b>\n` +
+          `🩺 Xizmat: <b>${currentServing.service_name || 'Xizmat'}</b>\n` +
+          `⚡️ Holat: <b>${isCalled ? '🟡 Chaqirilgan (Kutmoqda)' : '🟢 Qabulda (Xizmatda)'}</b>\n` +
+          `━━━━━━━━━━━━━━━━`,
+          {
+            replyMarkup: {
+              inline_keyboard: [
+                isCalled
+                  ? [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${currentServing.id}` }]
+                  : [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${currentServing.id}` }],
+                [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${currentServing.id}` }],
+                [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${currentServing.id}` }],
+                [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+              ]
+            }
+          }
+        );
+      } else {
+        await sendBusinessBotMessage(
+          chatId,
+          `👤 <b>Hozir qabulda faol mijoz yo‘q.</b>\n\nNavbatdagi mijozni chaqirish uchun quyidagi tugmani bosing:`,
+          {
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }],
+                [{ text: '📋 Jonli navbat', callback_data: `biz_open_queue_${biz.id}` }]
+              ]
+            }
+          }
+        );
+      }
+      return;
+    }
+
+    // 2. 📋 Jonli navbat
+    if (
+      text === t(lang, 'btn_menu_live_queue') ||
+      text === '📋 Jonli navbat' ||
+      text === t(lang, 'btn_menu_queue') ||
+      text === '🟢 Jonli navbat' ||
+      text === '🟢 Живая очередь' ||
+      text === '📋 Живая очередь' ||
+      text === '/queue'
+    ) {
+      if (!biz) return;
+      await renderLiveQueueMessage(chatId, biz.id, db, lang);
+      return;
+    }
+
+    // 3. 📅 Bugungi bronlar
+    if (
+      text === t(lang, 'btn_menu_today_bookings') ||
+      text === '📅 Bugungi bronlar' ||
+      text === t(lang, 'btn_menu_today') ||
+      text === '📋 Bugungi navbatlar' ||
+      text === '📋 Очереди на сегодня' ||
+      text === '📅 Брони на сегодня' ||
+      text === '/today' ||
+      text === '/bookings'
+    ) {
+      if (!biz) return;
+      const todayBookings = db.prepare(`
+        SELECT b.*, s.name as service_name, st.name as staff_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        LEFT JOIN staff st ON b.staff_id = st.id
+        WHERE b.business_id = ? AND b.booking_date = date('now', '+5 hours')
+        ORDER BY b.start_time ASC LIMIT 12
+      `).all(biz.id) as any[];
+
+      const todayQueues = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ?
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+        ORDER BY q.joined_at DESC LIMIT 8
+      `).all(biz.id) as any[];
+
+      if (todayBookings.length === 0 && todayQueues.length === 0) {
+        await sendBusinessBotMessage(chatId, `📅 <b>${biz.name}</b> uchun bugun hali bronlar yoki navbatlar yo‘q.`);
+        return;
+      }
+
+      let bMsg = `📅 <b>BUGUNGI BRONLAR VA NAVBATLAR — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n`;
+      if (todayBookings.length > 0) {
+        bMsg += `<b>🗓 Qabul bronlari (${todayBookings.length} ta):</b>\n`;
+        todayBookings.forEach((b, idx) => {
+          const bStatusIcon = b.status === 'CONFIRMED' ? '🟢' : b.status === 'PENDING' ? '🟡' : b.status === 'COMPLETED' ? '✅' : '❌';
+          bMsg += `${idx + 1}. ${bStatusIcon} <b>${b.start_time}</b> — #${b.booking_number}\n` +
+            `   👤 ${b.customer_name} (${b.customer_phone || ''})\n` +
+            `   🩺 ${b.service_name || 'Xizmat'}${b.staff_name ? ` (${b.staff_name})` : ''}\n\n`;
+        });
+      }
+
+      if (todayQueues.length > 0) {
+        bMsg += `<b>🎫 Jonli navbat chiptalari:</b>\n`;
+        todayQueues.slice(0, 5).forEach((q, idx) => {
+          const statusIcon = q.status === 'WAITING' ? '⏳' : q.status === 'CALLED' ? '🟡' : q.status === 'SERVING' ? '🟢' : q.status === 'COMPLETED' ? '✅' : '❌';
+          bMsg += `${idx + 1}. ${statusIcon} <b>#${q.queue_number}</b> — ${q.customer_name} (${q.service_name || 'Xizmat'})\n`;
+        });
+      }
+
+      await sendBusinessBotMessage(chatId, bMsg, {
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }],
+            [{ text: '📋 Jonli navbat', callback_data: `biz_open_queue_${biz.id}` }]
+          ]
+        }
+      });
+      return;
+    }
+
+    // 4. ➕ Navbatga qo‘shish (Instant Walk-in ticket)
+    if (
+      text === t(lang, 'btn_menu_quick_walkin') ||
+      text === '➕ Navbatga qo‘shish' ||
+      text === t(lang, 'btn_menu_walkin') ||
+      text === '➕ Jonli navbatga mijoz qo‘shish' ||
+      text === '➕ Добавить в очередь' ||
+      text === '➕ Добавить клиента в очередь' ||
+      text === '/walkin'
+    ) {
+      if (!biz) return;
+      const todayCount = (db.prepare(`
+        SELECT count(*) as c FROM queue_entries
+        WHERE business_id = ? AND (date(joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(joined_at) >= datetime('now', '-18 hours'))
+      `).get(biz.id) as any)?.c || 0;
+      const letter = biz.name.charAt(0).toUpperCase() || 'A';
+      const qNum = `${letter}-${100 + todayCount + 1}`;
+      const newEntryId = 'qe-' + crypto.randomUUID().slice(0, 10);
+
+      const firstService = db.prepare('SELECT id, name FROM services WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any;
+      const srvId = firstService?.id || null;
+      const srvName = firstService?.name || 'Jonli qabul';
+
+      db.prepare(`
+        INSERT INTO queue_entries (
+          id, business_id, service_id, customer_name, customer_phone,
+          queue_number, status, joined_at, called_source
+        ) VALUES (?, ?, ?, 'Jonli mijoz', '', ?, 'WAITING', CURRENT_TIMESTAMP, 'OPERATOR')
+      `).run(newEntryId, biz.id, srvId, qNum);
+
+      try {
+        botHooks.broadcastQueueUpdate?.(biz.id, {
+          type: 'QUEUE_JOINED',
+          entry: { id: newEntryId, queue_number: qNum, customer_name: 'Jonli mijoz', service_name: srvName, status: 'WAITING' },
+          source: 'OPERATOR',
+          timestamp: new Date().toISOString()
+        });
+      } catch (e) {}
+
+      await sendBusinessBotMessage(
+        chatId,
+        `🎟 <b>Yangi mijoz navbatga qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🎫 Chipta raqami: <b>#${qNum}</b>\n` +
+        `🏢 Muassasa: <b>${biz.name}</b>\n` +
+        `🩺 Xizmat: <b>${srvName}</b>\n` +
+        `⚡️ Holat: <b>Kutmoqda (WAITING)</b>\n━━━━━━━━━━━━━━━━\n` +
+        `<i>Ushbu chipta raqamini mijozga taqdim etishingiz mumkin.</i>`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    // 5. 📊 Bugungi hisobot / Statistika
+    if (
+      text === t(lang, 'btn_menu_report') ||
+      text === '📊 Bugungi hisobot' ||
+      text === t(lang, 'btn_menu_stats') ||
+      text === '📊 Statistika' ||
+      text === '📊 Статистика' ||
+      text === '📊 Отчет за сегодня' ||
+      text === '/stats' ||
+      text === '/report'
+    ) {
+      if (!biz) {
+        await sendBusinessBotMessage(chatId, 'ℹ️ Biznes ma’lumoti topilmadi.');
+        return;
+      }
+      const stats = getBusinessDailyStats(db, biz.id);
+      await sendBusinessBotMessage(
+        chatId,
+        `📊 <b>BUGUNGI HISOBOT — ${biz.name}</b>\n` +
+        `━━━━━━━━━━━━━━━━\n` +
+        `✅ <b>Yakunlangan xizmatlar:</b> <b>${stats.completedToday} nafar</b>\n` +
+        `⏳ <b>Navbatda kutayotgan:</b> <b>${stats.waitingCount} nafar</b>\n` +
+        `🟢 <b>Hozir qabulda:</b> <b>${stats.servingCount} nafar</b>\n` +
+        `📅 <b>Bugungi qabul bronlari:</b> <b>${stats.bookingsToday} ta</b>\n` +
+        `💰 <b>Kassa tushumi (taxminiy):</b> <b>${stats.revenueEstimate.toLocaleString()} so‘m</b>\n` +
+        `━━━━━━━━━━━━━━━━\n` +
+        `<i>Ma’lumotlar bazadan real vaqtda yangilanadi.</i>`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🔄 Yangilash', callback_data: `biz_refresh_dash_${biz.id}` }],
+              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    // 6. 🌐 Boshqaruv paneli
+    if (
+      text === t(lang, 'btn_menu_web_panel') ||
+      text === '🌐 Boshqaruv paneli' ||
+      text === '🌐 Панель управления' ||
+      text === '/panel' ||
+      text === '/dashboard'
+    ) {
+      if (!biz) return;
+      const appUrl = getBusinessPlatformAppUrl(db);
+      await sendBusinessBotMessage(
+        chatId,
+        `🌐 <b>${biz.name} — Boshqaruv Paneli:</b>\n━━━━━━━━━━━━━━━━\n` +
+        `Xodimlar ro‘yxati, xizmatlar, narxlar va barcha sozlamalarni veb-kabinet orqali boshqarishingiz mumkin:`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: `${appUrl}/#business-dashboard` } }],
+              [{ text: '🔗 Brauzerda ochish', url: `${appUrl}/#business-dashboard` }]
+            ]
+          }
+        }
+      );
       return;
     }
 
@@ -2798,6 +2974,38 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
       replyMarkup: {
         inline_keyboard: [
           [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }]
+        ]
+      }
+    });
+    return;
+  }
+
+  if (data.startsWith('biz_recall_')) {
+    const entryId = data.replace('biz_recall_', '');
+    const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
+    if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
+      await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
+      return;
+    }
+
+    db.prepare("UPDATE queue_entries SET status = 'CALLED', called_at = CURRENT_TIMESTAMP WHERE id = ?").run(entryId);
+
+    try {
+      botHooks.broadcastQueueUpdate?.(ent.business_id, {
+        type: 'QUEUE_CALLED',
+        entryId,
+        queue_number: ent.queue_number,
+        timestamp: Date.now()
+      });
+      botHooks.notifyQueueCalled?.(entryId);
+    } catch (e) {}
+
+    await sendBusinessBotMessage(cbChatId, `🔄 <b>Mijoz qayta chaqirildi: #${ent.queue_number} (${ent.customer_name})</b>`, {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${entryId}` }],
+          [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
+          [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${entryId}` }]
         ]
       }
     });

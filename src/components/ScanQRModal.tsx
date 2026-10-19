@@ -114,7 +114,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
     stopCamera();
     setErrorMessage(null);
 
-    // 1. Check HTTPS / Secure Context (Requirement 3: camera only over HTTPS or localhost)
+    // 1. Check HTTPS / Secure Context (camera only over HTTPS or localhost)
     if (typeof window !== 'undefined' && window.isSecureContext === false && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
       setCameraStatus('unsupported');
       setErrorMessage('Kamera xavfsizlik talablariga ko‘ra faqat HTTPS (shifrlangan aloqa) orqali ishlaydi. Iltimos, QR-kod rasmini galereyadan tanlang yoki kodni qo‘lda kiriting.');
@@ -130,7 +130,7 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
 
     setCameraStatus('requesting');
 
-    // 3. Permission timeout guard (prevents infinite loading if prompt is delayed or ignored)
+    // 3. Permission timeout guard (15s allows user to accept system dialogs on mobile)
     permissionTimeoutRef.current = setTimeout(() => {
       setCameraStatus((current) => {
         if (current === 'requesting') {
@@ -139,19 +139,24 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         }
         return current;
       });
-    }, 8000);
+    }, 15000);
 
     try {
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facingMode },
+          },
+          audio: false,
+        });
+      } catch (firstErr) {
+        // Fallback without strict facingMode (solves OverconstrainedError on older Android/iOS)
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
 
       if (permissionTimeoutRef.current) {
         clearTimeout(permissionTimeoutRef.current);
@@ -250,14 +255,23 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
             if (ctx) {
               const width = video.videoWidth || 640;
               const height = video.videoHeight || 480;
-              if (canvas.width !== width || canvas.height !== height) {
-                canvas.width = width;
-                canvas.height = height;
+              // Downscale to max 640px to prevent lagging on mobile CPUs
+              const maxDim = 640;
+              let scale = 1;
+              if (Math.max(width, height) > maxDim) {
+                scale = maxDim / Math.max(width, height);
               }
-              ctx.drawImage(video, 0, 0, width, height);
-              const imageData = ctx.getImageData(0, 0, width, height);
-              const code = jsQR(imageData.data, width, height, {
-                inversionAttempts: 'dontInvert',
+              const scaledW = Math.round(width * scale);
+              const scaledH = Math.round(height * scale);
+
+              if (canvas.width !== scaledW || canvas.height !== scaledH) {
+                canvas.width = scaledW;
+                canvas.height = scaledH;
+              }
+              ctx.drawImage(video, 0, 0, scaledW, scaledH);
+              const imageData = ctx.getImageData(0, 0, scaledW, scaledH);
+              const code = jsQR(imageData.data, scaledW, scaledH, {
+                inversionAttempts: 'attemptBoth',
               });
               if (code && code.data) {
                 detectedText = code.data;
@@ -329,10 +343,13 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
         setErrorMessage('QR-kod yaroqsiz yoki NavbatBor tizimiga tegishli emas.');
       }
     } catch (err: any) {
-      // Fallback: try direct business slug or ID lookup
+      // Robust Fallback: try direct business slug or ID lookup
       let slug = rawCode.trim();
-      if (slug.includes('#business/')) slug = slug.split('#business/')[1];
-      else if (slug.includes('/business/')) slug = slug.split('/business/')[1];
+      if (slug.includes('#business/')) slug = slug.split('#business/')[1].split('?')[0].split('/')[0];
+      else if (slug.includes('#/business/')) slug = slug.split('#/business/')[1].split('?')[0].split('/')[0];
+      else if (slug.includes('/business/')) slug = slug.split('/business/')[1].split('?')[0].split('/')[0];
+      else if (slug.includes('start=biz_')) slug = slug.split('start=biz_')[1].split('&')[0];
+      else if (slug.startsWith('biz_')) slug = slug.replace(/^biz_/, '');
 
       try {
         const bizData = await api.getBusinessBySlug(slug);
@@ -402,11 +419,40 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
     startCamera();
   };
 
+  // Native Telegram WebApp Scanner Integration
+  const openTelegramScanner = () => {
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg && typeof tg.showScanQrPopup === 'function') {
+      try {
+        tg.showScanQrPopup({ text: 'NavbatBor QR-kodini skanerlang' }, (text: string) => {
+          if (text) {
+            try {
+              tg.closeScanQrPopup?.();
+            } catch (e) {}
+            handleProcessScannedCode(text);
+            return true;
+          }
+          return false;
+        });
+        return true;
+      } catch (err) {
+        console.warn('Telegram scanner error:', err);
+      }
+    }
+    return false;
+  };
+
   // Lock body scroll and control lifecycle
   useEffect(() => {
     if (isOpen) {
       const prevOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
+
+      // Auto-open Telegram native scanner if running inside Telegram WebApp
+      const isTg = Boolean((window as any).Telegram?.WebApp?.showScanQrPopup);
+      if (isTg) {
+        openTelegramScanner();
+      }
 
       startCamera();
 
@@ -646,6 +692,19 @@ export const ScanQRModal: React.FC<ScanQRModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Telegram native scanner button if available */}
+              {Boolean((window as any).Telegram?.WebApp?.showScanQrPopup) && (
+                <button
+                  type="button"
+                  id="tg-native-scanner-btn"
+                  onClick={openTelegramScanner}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-95 text-white text-xs font-bold rounded-2xl flex items-center justify-center gap-2 transition cursor-pointer shadow-md min-h-[44px]"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Telegram Tezkor QR Skaneri</span>
+                </button>
+              )}
 
               {/* Reliable Fallback Options: Gallery upload & Manual entry */}
               <div className="grid grid-cols-2 gap-2 pt-1">

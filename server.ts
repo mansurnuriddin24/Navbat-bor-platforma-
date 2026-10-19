@@ -3380,6 +3380,14 @@ app.post('/api/check-in/resolve', (req, res) => {
       targetSlug = raw.split('#business/')[1].split('?')[0].split('/')[0];
     } else if (raw.includes('/business/')) {
       targetSlug = raw.split('/business/')[1].split('?')[0].split('/')[0];
+    } else if (raw.includes('#/business/')) {
+      targetSlug = raw.split('#/business/')[1].split('?')[0].split('/')[0];
+    } else if (raw.includes('start=biz_')) {
+      targetSlug = raw.split('start=biz_')[1].split('&')[0];
+    } else if (raw.includes('start=bkg_')) {
+      targetBookingNumber = raw.split('start=bkg_')[1].split('&')[0];
+    } else if (raw.includes('start=queue_')) {
+      targetQueueId = raw.split('start=queue_')[1].split('&')[0];
     } else if (raw.startsWith('{') && raw.endsWith('}')) {
       const parsed = JSON.parse(raw);
       if (parsed.slug) targetSlug = parsed.slug;
@@ -3411,7 +3419,7 @@ app.post('/api/check-in/resolve', (req, res) => {
       FROM businesses b
       LEFT JOIN categories c ON b.category_id = c.id
       LEFT JOIN cities ci ON b.city_id = ci.id
-      WHERE (b.slug = ? OR b.id = ? OR b.slug LIKE ? OR b.name LIKE ?) AND b.status = 'APPROVED'
+      WHERE (b.slug = ? OR b.id = ? OR b.slug LIKE ? OR b.name LIKE ?) AND b.status IN ('APPROVED', 'ACTIVE')
       LIMIT 1
     `).get(targetSlug, targetSlug, `%${targetSlug}%`, `%${targetSlug.replace(/-/g, ' ')}%`) as any;
   }
@@ -8114,13 +8122,10 @@ function getCustomerKeyboard(userRole?: string, hasBusiness?: boolean) {
 function getBusinessKeyboard(userRole?: string) {
   const keyboard: any[][] = [
     [{ text: '🟢 KEYINGI MIJOZNI CHAQIRISH' }],
-    [{ text: '👤 Hozirgi mijoz' }, { text: '📋 Bugungi navbatlar' }],
-    [{ text: '✅ Mijoz keldi' }, { text: '❌ O‘tkazib yuborish' }],
-    [{ text: '🔄 Qayta chaqirish' }, { text: '📅 Bugungi bronlar' }],
-    [{ text: '👨‍⚕️ Xodimlar' }, { text: '🩺 Xizmatlar' }],
-    [{ text: '🕒 Ish jadvali' }, { text: '📊 Statistika' }],
-    [{ text: '👥 Mijozlar (CRM)' }, { text: '💬 Telegram xabarlar' }],
-    [{ text: '💎 Tarif va to‘lov' }, { text: '👤 Mijoz rejimiga qaytish' }]
+    [{ text: '👤 Hozirgi mijoz' }, { text: '📋 Jonli navbat' }],
+    [{ text: '📅 Bugungi bronlar' }, { text: '➕ Navbatga qo‘shish' }],
+    [{ text: '📊 Bugungi hisobot' }, { text: '🌐 Boshqaruv paneli' }],
+    [{ text: '👤 Mijoz rejimiga qaytish' }]
   ];
   if (['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(userRole || '')) {
     keyboard.push([{ text: '👑 Admin rejimiga o‘tish' }]);
@@ -10049,8 +10054,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
       }
     }
 
-    // 📋 Bugungi navbatlar
-    if (text === '📋 Bugungi navbatlar' || text === '📋 CURRENT QUEUE' || text === '[ 📋 CURRENT QUEUE ]' || text === '/queue') {
+    // 📋 Jonli navbat / Bugungi navbatlar
+    if (text === '📋 Jonli navbat' || text === '📋 Bugungi navbatlar' || text === '📋 CURRENT QUEUE' || text === '[ 📋 CURRENT QUEUE ]' || text === '/queue') {
       if (bizInfo) {
         const waiting = db.prepare(`
           SELECT q.*, s.name as service_name
@@ -10075,6 +10080,53 @@ async function processTelegramUpdate(update: any): Promise<void> {
           replyMarkup: {
             inline_keyboard: [
               [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: 'biz_next_customer' }]
+            ]
+          }
+        });
+        return;
+      }
+    }
+
+    // ➕ Navbatga qo‘shish (Quick walk-in ticket)
+    if (text === '➕ Navbatga qo‘shish' || text === '➕ Jonli navbatga mijoz qo‘shish' || text === '/walkin') {
+      if (bizInfo) {
+        const todayCount = (db.prepare(`
+          SELECT count(*) as c FROM queue_entries
+          WHERE business_id = ? AND (date(joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(joined_at) >= datetime('now', '-18 hours'))
+        `).get(bizInfo.business.id) as any)?.c || 0;
+        const letter = bizInfo.business.name.charAt(0).toUpperCase() || 'A';
+        const qNum = `${letter}-${100 + todayCount + 1}`;
+        const newEntryId = 'qe-' + crypto.randomUUID().slice(0, 10);
+
+        const firstService = db.prepare('SELECT id, name FROM services WHERE business_id = ? AND is_active = 1 LIMIT 1').get(bizInfo.business.id) as any;
+        const srvId = firstService?.id || null;
+        const srvName = firstService?.name || 'Jonli qabul';
+
+        db.prepare(`
+          INSERT INTO queue_entries (
+            id, business_id, service_id, customer_name, customer_phone,
+            queue_number, status, joined_at, called_source
+          ) VALUES (?, ?, ?, 'Jonli mijoz', '', ?, 'WAITING', CURRENT_TIMESTAMP, 'OPERATOR')
+        `).run(newEntryId, bizInfo.business.id, srvId, qNum);
+
+        broadcastQueueUpdate(bizInfo.business.id, {
+          type: 'QUEUE_JOINED',
+          entry: { id: newEntryId, queue_number: qNum, customer_name: 'Jonli mijoz', service_name: srvName, status: 'WAITING' },
+          source: 'OPERATOR',
+          timestamp: new Date().toISOString()
+        });
+
+        await sendTelegramAlert({
+          chatId,
+          message: `🎟 <b>Yangi mijoz navbatga qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n` +
+            `🎫 Chipta raqami: <b>#${qNum}</b>\n` +
+            `🏢 Muassasa: <b>${bizInfo.business.name}</b>\n` +
+            `🩺 Xizmat: <b>${srvName}</b>\n` +
+            `⚡️ Holat: <b>Kutmoqda (WAITING)</b>\n━━━━━━━━━━━━━━━━\n` +
+            `<i>Ushbu chipta raqamini mijozga taqdim etishingiz mumkin.</i>`,
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${bizInfo.business.id}` }]
             ]
           }
         });
@@ -10271,8 +10323,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
       }
     }
 
-    // 📊 Statistika
-    if (text === "📊 Statistika" || text === "📊 TODAY'S STATISTICS" || text === "[ 📊 TODAY'S STATISTICS ]" || text === '/stats') {
+    // 📊 Bugungi hisobot / Statistika
+    if (text === "📊 Bugungi hisobot" || text === "📊 Statistika" || text === "📊 TODAY'S STATISTICS" || text === "[ 📊 TODAY'S STATISTICS ]" || text === '/stats') {
       if (bizInfo) {
         const served = (db.prepare(`
           SELECT count(*) as c FROM queue_entries
@@ -10294,7 +10346,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
 
         await sendTelegramAlert({
           chatId,
-          message: `📊 <b>${bizInfo.business.name} — Bugungi Statistika:</b>\n━━━━━━━━━━━━━━━━\n` +
+          message: `📊 <b>${bizInfo.business.name} — Bugungi Hisobot:</b>\n━━━━━━━━━━━━━━━━\n` +
             `✅ Yakunlangan xizmatlar: <b>${served} ta</b>\n` +
             `⏳ Hozir navbatda kutilmoqda: <b>${waiting} ta</b>\n` +
             `🚫 Kelmaganlar (No-Show): <b>${noShow} ta</b>\n` +
@@ -10303,6 +10355,24 @@ async function processTelegramUpdate(update: any): Promise<void> {
           replyMarkup: {
             inline_keyboard: [
               [{ text: '💼 Veb panelni ochish', web_app: { url: `${appUrl}/#business-dashboard` } }]
+            ]
+          }
+        });
+        return;
+      }
+    }
+
+    // 🌐 Boshqaruv paneli
+    if (text === '🌐 Boshqaruv paneli' || text === '/panel' || text === '/dashboard') {
+      if (bizInfo) {
+        await sendTelegramAlert({
+          chatId,
+          message: `🌐 <b>${bizInfo.business.name} — Boshqaruv Paneli:</b>\n━━━━━━━━━━━━━━━━\n` +
+            `Xodimlar ro‘yxati, xizmatlar, narxlar va barcha sozlamalarni veb-kabinet orqali boshqarishingiz mumkin:`,
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: `${appUrl}/#business-dashboard` } }],
+              [{ text: '🔗 Brauzerda ochish', url: `${appUrl}/#business-dashboard` }]
             ]
           }
         });

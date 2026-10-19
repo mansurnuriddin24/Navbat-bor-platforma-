@@ -3343,7 +3343,7 @@ app.post('/api/bookings/:id/send-reminder', requireAuth, async (req, res) => {
 // 4. DIGITAL QUEUE (ELEKTRON NAVBAT)
 // ==========================================
 
-app.post('/api/queue/join', (req, res) => {
+app.post('/api/queue/join', async (req, res) => {
   let user = getAuthUser(req);
   let sessionToken: string | null = null;
   const { business_id, service_id, customer_name, customer_phone, telegram_chat_id } = req.body;
@@ -3527,7 +3527,11 @@ app.post('/api/queue/join', (req, res) => {
     }
   }
   const finalBizChat = qBizChatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
-  const bizQueueAlert = `⚡️ <b>Yangi jonli navbatchi qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqami: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n👤 Mijoz: <b>${customer_name || user.name}</b> (📞 ${customer_phone || user.phone || 'Noma‘lum'})\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Jonli navbatlar soni: ${activeCount + 1} ta</i>`;
+  const rawCustPhone = (customer_phone || user.phone || '').trim();
+  const hasRealCustPhone = rawCustPhone.replace(/[^0-9]/g, '').length >= 7;
+  const custPhoneDisplay = hasRealCustPhone ? ` (📞 ${rawCustPhone})` : '';
+
+  const bizQueueAlert = `⚡️ <b>Yangi jonli navbatchi qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqami: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n👤 Mijoz: <b>${customer_name || user.name}</b>${custPhoneDisplay}\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Jonli navbatlar soni: ${activeCount + 1} ta</i>`;
   const bizQueueMarkup = {
     inline_keyboard: [
       [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${business_id}` }],
@@ -3535,7 +3539,13 @@ app.post('/api/queue/join', (req, res) => {
     ]
   };
 
-  if (finalBizChat) {
+  // Notify Business Owner: single notification without duplicate
+  let bizNotified = false;
+  try {
+    bizNotified = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizQueueAlert, { replyMarkup: bizQueueMarkup });
+  } catch (e) {}
+
+  if (!bizNotified && finalBizChat) {
     sendTelegramAlert({
       chatId: finalBizChat,
       recipientType: 'BUSINESS',
@@ -3544,11 +3554,6 @@ app.post('/api/queue/join', (req, res) => {
       replyMarkup: bizQueueMarkup
     }).catch(() => {});
   }
-
-  // Also notify via dedicated Business Bot if owner is registered
-  try {
-    notifyBusinessOwnerViaBusinessBot(db, business_id, bizQueueAlert, { replyMarkup: bizQueueMarkup }).catch(() => {});
-  } catch (e) {}
 
   const botUser = getBotUsername();
   res.status(201).json({
@@ -4918,7 +4923,12 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
   };
 
   let businessTelegramSent = false;
-  if (finalBizChat) {
+  // Prefer dedicated Business Bot if owner is registered there
+  try {
+    businessTelegramSent = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizMsg, { replyMarkup: bkgCallMarkup });
+  } catch(e) {}
+
+  if (!businessTelegramSent && finalBizChat) {
     try {
       await sendTelegramAlert({
         chatId: finalBizChat,
@@ -4930,12 +4940,6 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
       businessTelegramSent = true;
     } catch(e) {}
   }
-
-  // Also notify via dedicated Business Bot if owner is registered there
-  try {
-    const bBotSent = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizMsg, { replyMarkup: bkgCallMarkup });
-    if (bBotSent) businessTelegramSent = true;
-  } catch(e) {}
 
   // 9. Send Telegram Alert to Customer
   let customerChatId: string | null = null;
@@ -5109,11 +5113,15 @@ export async function executeCancelBookingAtomic(params: CancelBookingParams): P
       `📝 Sabab: <i>${finalReason}</i>\n━━━━━━━━━━━━━━━━\n` +
       `<i>Bo‘shagan vaqt boshqa mijozlar uchun ochiq bo‘ldi.</i>`;
 
+    let cancelBizSent = false;
+    try {
+      cancelBizSent = await notifyBusinessOwnerViaBusinessBot(db, booking.business_id, cancelNoticeBiz);
+    } catch (e) {}
+
     const bizChat = db.prepare('SELECT telegram_chat_id FROM businesses WHERE id = ?').get(booking.business_id) as any;
-    if (bizChat?.telegram_chat_id) {
+    if (!cancelBizSent && bizChat?.telegram_chat_id) {
       sendTelegramAlert({ chatId: bizChat.telegram_chat_id, recipientType: 'BUSINESS', recipientId: booking.business_id, message: cancelNoticeBiz }).catch(() => {});
     }
-    notifyBusinessOwnerViaBusinessBot(db, booking.business_id, cancelNoticeBiz).catch(() => {});
   } else {
     // Cancelled by Business -> Notify Customer
     const targetCustChat = booking.cust_tg;

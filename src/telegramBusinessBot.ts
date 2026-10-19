@@ -1087,6 +1087,32 @@ export function addWalkinCustomerViaBot(
   }
 }
 
+export function checkEntryTelegramChat(db: DatabaseSync, entry: any): string | null {
+  if (entry?.telegram_chat_id && String(entry.telegram_chat_id).trim()) {
+    return String(entry.telegram_chat_id).trim();
+  }
+  if (entry?.customer_id) {
+    try {
+      const u = db.prepare('SELECT telegram_chat_id FROM users WHERE id = ?').get(entry.customer_id) as any;
+      if (u?.telegram_chat_id && String(u.telegram_chat_id).trim()) {
+        return String(u.telegram_chat_id).trim();
+      }
+    } catch (e) {}
+  }
+  if (entry?.customer_phone) {
+    const raw = String(entry.customer_phone).replace(/[^0-9]/g, '');
+    if (raw.length >= 7) {
+      try {
+        const u = db.prepare('SELECT telegram_chat_id FROM users WHERE telegram_chat_id IS NOT NULL AND phone LIKE ? LIMIT 1').get(`%${raw.slice(-9)}%`) as any;
+        if (u?.telegram_chat_id && String(u.telegram_chat_id).trim()) {
+          return String(u.telegram_chat_id).trim();
+        }
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
 /**
  * Atomically call the next waiting customer for a business
  */
@@ -1217,7 +1243,16 @@ export function executeCallNextCustomerInBot(
 
     db.exec('COMMIT;');
 
-    const updatedEntry = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(nextWaiting.id) as any;
+    const updatedEntry = db.prepare(`
+      SELECT q.*, s.name as service_name
+      FROM queue_entries q
+      LEFT JOIN services s ON q.service_id = s.id
+      WHERE q.id = ?
+    `).get(nextWaiting.id) as any;
+
+    if (updatedEntry && !updatedEntry.service_name && nextWaiting?.service_name) {
+      updatedEntry.service_name = nextWaiting.service_name;
+    }
 
     try {
       botHooks.broadcastQueueUpdate?.(businessId, {
@@ -2186,14 +2221,23 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       const res = executeCallNextCustomerInBot(db, biz.id, auth.user?.id, tgUserId);
       if (res.success && res.entry) {
         const isBooking = Boolean(res.entry.is_booking);
+        const customerChat = checkEntryTelegramChat(db, res.entry);
+        const hasCustPhone = res.entry.customer_phone && res.entry.customer_phone.replace(/[^0-9]/g, '').length >= 7;
+        const tgStatusNotice = customerChat
+          ? '📢 Mijozga Telegram orqali xabar jo‘natildi.'
+          : (hasCustPhone
+              ? `📞 Mijoz Telegramga ulanmagan: ${res.entry.customer_phone}`
+              : 'ℹ️ Mijozning Telegram manzili mavjud emas.');
+
         await sendBusinessBotMessage(
           chatId,
           `📢 <b>KEYINGI MIJOZ CHAQIRILDI!</b>\n━━━━━━━━━━━━━━━━\n` +
           `🎫 ${isBooking ? 'Bron raqami' : 'Navbat raqami'}: <b>#${res.entry.queue_number}</b>\n` +
-          `👤 Mijoz: <b>${res.entry.customer_name}</b>${res.entry.customer_phone ? ` (📞 ${res.entry.customer_phone})` : ''}\n` +
-          `🩺 Xizmat: <b>${res.entry.service_name || 'Xizmat'}</b>\n` +
+          `👤 Mijoz: <b>${res.entry.customer_name}</b>${hasCustPhone ? ` (📞 ${res.entry.customer_phone})` : ''}\n` +
+          `🩺 Xizmat: <b>${res.entry.service_name || 'Standart xizmat'}</b>\n` +
           (res.entry.start_time ? `⏰ Belgilangan vaqt: <b>${res.entry.start_time}</b>\n` : '') +
           `━━━━━━━━━━━━━━━━\n` +
+          `${tgStatusNotice}\n` +
           `<i>Sayt va TV monitor ekranda jonli yangilandi.</i>`,
           {
             replyMarkup: {
@@ -3036,11 +3080,19 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
       return;
     }
 
+    const customerChat = checkEntryTelegramChat(db, res.entry);
+    const hasCustPhone = res.entry.customer_phone && res.entry.customer_phone.replace(/[^0-9]/g, '').length >= 7;
+    const tgStatusNotice = customerChat
+      ? '📢 Mijozga Telegram orqali xabar jo‘natildi.'
+      : (hasCustPhone
+          ? `📞 Mijoz Telegramga ulanmagan: ${res.entry.customer_phone}`
+          : 'ℹ️ Mijozning Telegram manzili mavjud emas.');
+
     await sendBusinessBotMessage(
       cbChatId,
       `📢 <b>MIJOZ CHAQIRILDI: #${res.entry.queue_number} — ${res.entry.customer_name}</b>\n` +
-      `Xizmat: <b>${res.entry.service_name || 'Xizmat'}</b>\n` +
-      `📢 Mijozga Telegram orqali xabar jo‘natildi.`,
+      `🩺 Xizmat: <b>${res.entry.service_name || 'Standart xizmat'}</b>\n` +
+      `${tgStatusNotice}`,
       {
         replyMarkup: {
           inline_keyboard: [

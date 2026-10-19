@@ -91,7 +91,8 @@ export function getBusinessBotToken(): string {
 }
 
 export function getBusinessBotUsername(): string {
-  return process.env.BUSINESS_BOT_USERNAME || 'navbatbor_bizness_bot';
+  const custom = process.env.BUSINESS_BOT_USERNAME || 'navbatbor_bizness_bot';
+  return custom.replace(/^@+/, '').trim();
 }
 
 export function getSuperAdminTelegramIds(): string[] {

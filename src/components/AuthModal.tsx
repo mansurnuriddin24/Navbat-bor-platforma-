@@ -13,6 +13,10 @@ interface AuthModalProps {
   botType?: 'customer' | 'business';
 }
 
+const cleanBotUsername = (username?: string, fallback: string = 'Navbat1Uzb_bot'): string => {
+  return (username || fallback).replace(/^@+/, '').trim();
+};
+
 export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'login',
   onClose,
@@ -50,6 +54,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const countdownTimerRef = useRef<any>(null);
 
   const { isTMA, tgUser, initData, hapticFeedback } = useTelegramWebApp();
+
+  const currentBotUser = cleanBotUsername(
+    tgSession?.botUsername,
+    activeBotType === 'business' ? 'navbatbor_bizness_bot' : 'Navbat1Uzb_bot'
+  );
 
   // Clean up polling and countdown timers on unmount
   useEffect(() => {
@@ -100,6 +109,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       const session = await api.createTelegramAuthSession(selectedBot);
+      if (session && session.botUsername) {
+        session.botUsername = session.botUsername.replace(/^@+/, '').trim();
+      }
       setTgSession(session);
 
       if (session.expiresAt) {
@@ -162,14 +174,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleOpenTelegramBot = () => {
     if (!tgSession) return;
     setBotOpened(true);
+    const deepLink = tgSession.deepLink || `https://t.me/${currentBotUser}?start=${tgSession.sessionId}`;
+    const tgDirect = tgSession.tgDirect || `tg://resolve?domain=${currentBotUser}&start=${tgSession.sessionId}`;
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isMobile) {
-      window.location.href = tgSession.tgDirect;
+      window.location.href = tgDirect;
       setTimeout(() => {
-        window.open(tgSession.deepLink, '_blank');
+        window.open(deepLink, '_blank');
       }, 600);
     } else {
-      window.open(tgSession.deepLink, '_blank');
+      window.open(deepLink, '_blank');
     }
   };
 
@@ -283,7 +297,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   : mode === 'register' ? 'Telegram boti orqali ro‘yxatdan o‘ting' : 'Telegram botingiz orqali tasdiqlang'}
               </h4>
               <p className="text-xs text-slate-600 mb-3.5">
-                Pastdagi tugmani bosing va <b>@{tgSession?.botUsername || (activeBotType === 'business' ? 'navbatbor_bizness_bot' : 'Navbat1Uzb_bot')}</b> da <b>START</b> tugmasini bosing
+                Pastdagi tugmani bosing va <b>@{currentBotUser}</b> da <b>START</b> tugmasini bosing
               </p>
 
               {tgSession && (
@@ -300,9 +314,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       {copiedCode ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-                  {tgSession.botUsername && (
+                  {currentBotUser && (
                     <span className="text-[11px] text-slate-400">
-                      Rasmiy bot: <span className="font-semibold text-sky-700">@{tgSession.botUsername}</span>
+                      Rasmiy bot: <span className="font-semibold text-sky-700">@{currentBotUser}</span>
                     </span>
                   )}
                 </div>
@@ -320,7 +334,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     className="w-full py-3.5 px-4 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] hover:from-[#229ED9] hover:to-[#1a89bf] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2.5 shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
                   >
                     <Send className="w-4 h-4 fill-white" />
-                    <span>Telegram Botni ochish (@{tgSession.botUsername})</span>
+                    <span>Telegram Botni ochish (@{currentBotUser})</span>
                     <ExternalLink className="w-4 h-4 opacity-80" />
                   </a>
 
@@ -372,7 +386,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
               <div className="flex items-start gap-2 text-slate-600 text-[11px]">
                 <span className="w-4 h-4 rounded-full bg-sky-100 text-sky-700 font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
-                <span><b>«Telegram Botni ochish»</b> tugmasini bosing yoki botga kiring: <b>@{tgSession?.botUsername || 'Navbat1Uzb_bot'}</b></span>
+                <span><b>«Telegram Botni ochish»</b> tugmasini bosing yoki botga kiring: <b>@{currentBotUser}</b></span>
               </div>
               <div className="flex items-start gap-2 text-slate-600 text-[11px]">
                 <span className="w-4 h-4 rounded-full bg-sky-100 text-sky-700 font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>

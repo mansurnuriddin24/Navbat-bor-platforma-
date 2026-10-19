@@ -927,7 +927,8 @@ function setSetting(key: string, value: string) {
 }
 
 function getBotUsername(): string {
-  return getSetting('telegram_bot_username') || process.env.TELEGRAM_BOT_USERNAME || 'Navbat1Uzb_bot';
+  const custom = getSetting('telegram_bot_username') || process.env.TELEGRAM_BOT_USERNAME || 'Navbat1Uzb_bot';
+  return custom.replace(/^@+/, '').trim();
 }
 
 function getPlatformAppUrl(): string {
@@ -8196,7 +8197,7 @@ app.post('/api/auth/telegram-session', (req, res) => {
   `).run(sessionId, code, createdAt, expiresAt);
 
   const isBusiness = bot_type === 'business';
-  const botUsername = isBusiness ? getBusinessBotUsername() : getBotUsername();
+  const botUsername = (isBusiness ? getBusinessBotUsername() : getBotUsername()).replace(/^@+/, '').trim();
   const deepLink = `https://t.me/${botUsername}?start=${sessionId}`;
   const tgDirect = `tg://resolve?domain=${botUsername}&start=${sessionId}`;
 

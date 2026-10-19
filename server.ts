@@ -8724,7 +8724,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
       if (!bizInfo && targetBizId) {
         const bizRow = db.prepare('SELECT * FROM businesses WHERE id = ?').get(targetBizId) as any;
         if (bizRow) {
-          bizInfo = { business: bizRow, permissions: ['CALL_NEXT_CUSTOMER'] };
+          bizInfo = { business: bizRow, role: 'OWNER', permissions: ['CALL_NEXT_CUSTOMER'] };
         }
       }
       if (bizInfo) {
@@ -15405,7 +15405,15 @@ async function startServer() {
         break;
       }
     }
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '1y',
+      immutable: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      }
+    }));
     app.get('*', (req, res) => {
       const indexPath = path.join(distPath, 'index.html');
       if (fs.existsSync(indexPath)) {

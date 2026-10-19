@@ -449,11 +449,13 @@ export const WalkInModal: React.FC<WalkInModalProps> = ({
               {/* 3. Service & Staff Selection */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                  <label htmlFor="walkin-service-select" className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
                     <Layers className="w-3.5 h-3.5 text-slate-400" />
                     <span>Xizmat turi</span>
                   </label>
                   <select
+                    id="walkin-service-select"
+                    aria-label="Xizmat turi"
                     value={serviceId}
                     onChange={(e) => setServiceId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -467,11 +469,13 @@ export const WalkInModal: React.FC<WalkInModalProps> = ({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                  <label htmlFor="walkin-staff-select" className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
                     <User className="w-3.5 h-3.5 text-slate-400" />
                     <span>Mutaxassis (Xodim)</span>
                   </label>
                   <select
+                    id="walkin-staff-select"
+                    aria-label="Mutaxassis (Xodim)"
                     value={staffId}
                     onChange={(e) => setStaffId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"

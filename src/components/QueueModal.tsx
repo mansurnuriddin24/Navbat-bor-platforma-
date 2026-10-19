@@ -254,11 +254,12 @@ export const QueueModal: React.FC<QueueModalProps> = ({
             )}
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              <label htmlFor="queue-service-select" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 {t('services_title')}
               </label>
               <select
                 id="queue-service-select"
+                aria-label={t('services_title')}
                 value={selectedServiceId}
                 onChange={(e) => setSelectedServiceId(e.target.value)}
                 className="w-full text-xs border border-slate-300 rounded-xl px-3 py-2.5 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer"
@@ -272,12 +273,13 @@ export const QueueModal: React.FC<QueueModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              <label htmlFor="queue-name-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 {t('full_name')}
               </label>
               <input
                 type="text"
                 id="queue-name-input"
+                aria-label={t('full_name')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -286,12 +288,13 @@ export const QueueModal: React.FC<QueueModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              <label htmlFor="queue-phone-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 {t('phone_number')}
               </label>
               <input
                 type="tel"
                 id="queue-phone-input"
+                aria-label={t('phone_number')}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 required

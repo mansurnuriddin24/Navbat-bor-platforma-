@@ -71,8 +71,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           ) : (
             <div className="hidden md:flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1.5 rounded-xl transition min-h-[38px]">
               <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <label htmlFor="nav-city-select" className="sr-only">{t('select_city')}</label>
               <select
                 id="nav-city-select"
+                aria-label={t('select_city')}
                 value={selectedCity}
                 onChange={(e) => onSelectCity(e.target.value)}
                 className="bg-transparent font-medium text-slate-800 cursor-pointer focus:outline-none text-xs"
@@ -365,7 +367,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* City selector on mobile */}
           <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+            <label htmlFor="mobile-nav-city-select" className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-blue-600" />
               <span>{t('select_city')}:</span>
             </label>
@@ -376,6 +378,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             ) : (
               <select
+                id="mobile-nav-city-select"
+                aria-label={t('select_city')}
                 value={selectedCity}
                 onChange={(e) => {
                   onSelectCity(e.target.value);

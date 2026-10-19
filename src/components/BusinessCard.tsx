@@ -207,7 +207,7 @@ export const BusinessCard: React.FC<BusinessCardProps> = ({
             )}
           </div>
 
-          <p className="text-xs text-slate-500 line-clamp-2 mb-3">
+          <p className="text-xs text-slate-600 line-clamp-2 mb-3">
             {business.description || t('footer_desc')}
           </p>
 
@@ -235,7 +235,7 @@ export const BusinessCard: React.FC<BusinessCardProps> = ({
                   {isOpen ? 'Hozir ochiq' : 'Biznes hozir yopiq'}
                 </span>
               </div>
-              <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+              <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
                 Ish vaqti: {workingHours}
               </span>
             </div>
@@ -269,9 +269,9 @@ export const BusinessCard: React.FC<BusinessCardProps> = ({
                   style={{ width: `${waitPercentage}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between mt-1 text-[10px] text-slate-500 font-medium">
+              <div className="flex items-center justify-between mt-1 text-[10px] text-slate-600 font-medium">
                 <span>{trafficVariant.label}</span>
-                <span className="font-semibold text-slate-600">Navbat mavjud</span>
+                <span className="font-semibold text-slate-700">Navbat mavjud</span>
               </div>
             </div>
           ) : (

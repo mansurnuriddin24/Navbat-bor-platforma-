@@ -10,22 +10,31 @@ import { User, Category, City, BusinessItem } from './types';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { BusinessCard } from './components/BusinessCard';
-import { BusinessDetail } from './components/BusinessDetail';
-import { CustomerDashboard } from './components/CustomerDashboard';
-import { BusinessDashboard } from './components/BusinessDashboard';
-import { AdminPanel } from './components/AdminPanel';
-import { AuthModal } from './components/AuthModal';
-import { BusinessOnboardingModal } from './components/BusinessOnboardingModal';
-import { LegalModal } from './components/LegalModal';
-import { QRCodeModal } from './components/QRCodeModal';
-import { ScanQRModal } from './components/ScanQRModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { HeroLiveWidget } from './components/HeroLiveWidget';
-import { OperatingPartnerDashboard } from './components/OperatingPartnerDashboard';
-import { CustomerBenefitsPage } from './components/CustomerBenefitsPage';
-import { BusinessBenefitsPage } from './components/BusinessBenefitsPage';
-import { LiveQueueDisplay } from './components/LiveQueueDisplay';
 import { useTranslation } from './i18n/LanguageContext';
+
+// Dynamic code-splitting for secondary dashboards and heavy modals
+const BusinessDetail = React.lazy(() => import('./components/BusinessDetail').then(m => ({ default: m.BusinessDetail })));
+const CustomerDashboard = React.lazy(() => import('./components/CustomerDashboard').then(m => ({ default: m.CustomerDashboard })));
+const BusinessDashboard = React.lazy(() => import('./components/BusinessDashboard').then(m => ({ default: m.BusinessDashboard })));
+const AdminPanel = React.lazy(() => import('./components/AdminPanel').then(m => ({ default: m.AdminPanel })));
+const AuthModal = React.lazy(() => import('./components/AuthModal').then(m => ({ default: m.AuthModal })));
+const BusinessOnboardingModal = React.lazy(() => import('./components/BusinessOnboardingModal').then(m => ({ default: m.BusinessOnboardingModal })));
+const LegalModal = React.lazy(() => import('./components/LegalModal').then(m => ({ default: m.LegalModal })));
+const QRCodeModal = React.lazy(() => import('./components/QRCodeModal').then(m => ({ default: m.QRCodeModal })));
+const ScanQRModal = React.lazy(() => import('./components/ScanQRModal').then(m => ({ default: m.ScanQRModal })));
+const OperatingPartnerDashboard = React.lazy(() => import('./components/OperatingPartnerDashboard').then(m => ({ default: m.OperatingPartnerDashboard })));
+const CustomerBenefitsPage = React.lazy(() => import('./components/CustomerBenefitsPage').then(m => ({ default: m.CustomerBenefitsPage })));
+const BusinessBenefitsPage = React.lazy(() => import('./components/BusinessBenefitsPage').then(m => ({ default: m.BusinessBenefitsPage })));
+const LiveQueueDisplay = React.lazy(() => import('./components/LiveQueueDisplay').then(m => ({ default: m.LiveQueueDisplay })));
+
+const ViewFallback = () => (
+  <div className="min-h-[50vh] flex flex-col items-center justify-center p-8 text-center text-slate-500">
+    <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3" />
+    <span className="text-xs font-semibold">Yuklanmoqda...</span>
+  </div>
+);
 
 export default function App() {
   const { t, translateCategory, translateCity } = useTranslation();
@@ -381,13 +390,15 @@ export default function App() {
   // TV / Smart TV Live Display View Mode (FullScreen, No Navbar/Footer clutter)
   if (activeView === 'live-display' && displayToken) {
     return (
-      <LiveQueueDisplay
-        token={displayToken}
-        onClose={() => {
-          window.location.hash = '';
-          setActiveView(currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF' ? 'business-dashboard' : 'home');
-        }}
-      />
+      <React.Suspense fallback={<ViewFallback />}>
+        <LiveQueueDisplay
+          token={displayToken}
+          onClose={() => {
+            window.location.hash = '';
+            setActiveView(currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF' ? 'business-dashboard' : 'home');
+          }}
+        />
+      </React.Suspense>
     );
   }
 
@@ -420,7 +431,8 @@ export default function App() {
 
       {/* Main View Switcher */}
       <main className="flex-1 pb-16 md:pb-12">
-        {/* VIEW: HOME & SEARCH */}
+        <React.Suspense fallback={<ViewFallback />}>
+          {/* VIEW: HOME & SEARCH */}
         {(activeView === 'home' || activeView === 'search') && (
           <div>
             {/* Hero Search Section - Compact, Focused & 2-Second Visual Understanding */}
@@ -484,12 +496,15 @@ export default function App() {
                           <span>{cities[0] ? translateCity(cities[0].name) : 'Qarshi'}</span>
                         </div>
                       ) : (
-                        <select
-                          id="hero-city-select"
-                          value={selectedCity}
-                          onChange={(e) => setSelectedCity(e.target.value)}
-                          className="w-full text-xs font-semibold bg-transparent focus:outline-none cursor-pointer text-slate-800"
-                        >
+                        <>
+                          <label htmlFor="hero-city-select" className="sr-only">{t('select_city')}</label>
+                          <select
+                            id="hero-city-select"
+                            aria-label={t('select_city')}
+                            value={selectedCity}
+                            onChange={(e) => setSelectedCity(e.target.value)}
+                            className="w-full text-xs font-semibold bg-transparent focus:outline-none cursor-pointer text-slate-800"
+                          >
                           <option value="">{t('select_city')} ({t('cat_all')})</option>
                           {cities.map((c) => (
                             <option key={c.id} value={c.id}>
@@ -497,6 +512,7 @@ export default function App() {
                             </option>
                           ))}
                         </select>
+                        </>
                       )}
                     </div>
 
@@ -561,7 +577,7 @@ export default function App() {
                   )}
 
                   {/* Single Honest Trust Signal */}
-                  <div className="pt-0.5 flex items-center justify-center gap-1.5 text-[11px] sm:text-xs text-slate-400">
+                  <div className="pt-0.5 flex items-center justify-center gap-1.5 text-[11px] sm:text-xs text-slate-300">
                     <ShieldCheck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                     <span>{t('hero_badge')}</span>
                   </div>
@@ -643,9 +659,10 @@ export default function App() {
                     <span>{isGeoLoading ? t('detecting_gps') : coords && sortBy === 'nearby' ? t('near_me_active') : t('near_me')}</span>
                   </button>
 
-                  <span className="text-xs text-slate-500 ml-1">{t('sort_label')}</span>
+                  <label htmlFor="catalog-sort-select" className="text-xs text-slate-700 ml-1">{t('sort_label')}</label>
                   <select
                     id="catalog-sort-select"
+                    aria-label={t('sort_label')}
                     value={sortBy}
                     onChange={(e) => {
                       setSortBy(e.target.value);
@@ -914,6 +931,7 @@ export default function App() {
             onOpenOnboarding={() => setOnboardModalOpen(true)}
           />
         )}
+        </React.Suspense>
       </main>
 
       {/* Footer */}
@@ -938,57 +956,70 @@ export default function App() {
       />
 
       {/* MODALS */}
-      {authModalOpen && (
-        <AuthModal
-          initialMode={authInitialMode}
-          botType={authModalBotType}
-          onClose={() => {
-            setAuthModalOpen(false);
-            setAuthModalBotType('customer');
-          }}
-          onSuccess={(u) => {
-            setCurrentUser(u);
-            setAuthModalOpen(false);
-            setAuthModalBotType('customer');
-            if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
-            else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') setActiveView('operating-partner');
-            else if (u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
-            else setActiveView('customer-dashboard');
-          }}
-        />
-      )}
+      <React.Suspense fallback={null}>
+        {authModalOpen && (
+          <AuthModal
+            initialMode={authInitialMode}
+            botType={authModalBotType}
+            onClose={() => {
+              setAuthModalOpen(false);
+              setAuthModalBotType('customer');
+            }}
+            onSuccess={(u) => {
+              setCurrentUser(u);
+              setAuthModalOpen(false);
+              setAuthModalBotType('customer');
+              if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
+              else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') setActiveView('operating-partner');
+              else if (u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
+              else setActiveView('customer-dashboard');
+            }}
+          />
+        )}
 
-      {onboardModalOpen && (
-        <BusinessOnboardingModal
-          currentUser={currentUser}
-          categories={categories}
-          cities={cities}
-          onClose={() => setOnboardModalOpen(false)}
-          onSuccess={(biz, newUser) => {
-            if (newUser) {
-              setCurrentUser(newUser);
-            }
-            loadBusinesses();
-          }}
-          onOpenAuth={() => {
-            setOnboardModalOpen(false);
-            setAuthInitialMode('register');
-            setAuthModalBotType('business');
-            setAuthModalOpen(true);
-          }}
-        />
-      )}
+        {onboardModalOpen && (
+          <BusinessOnboardingModal
+            currentUser={currentUser}
+            categories={categories}
+            cities={cities}
+            onClose={() => setOnboardModalOpen(false)}
+            onSuccess={(biz, newUser) => {
+              if (newUser) {
+                setCurrentUser(newUser);
+              }
+              loadBusinesses();
+            }}
+            onOpenAuth={() => {
+              setOnboardModalOpen(false);
+              setAuthInitialMode('register');
+              setAuthModalBotType('business');
+              setAuthModalOpen(true);
+            }}
+          />
+        )}
 
-      {legalModalType && (
-        <LegalModal type={legalModalType} onClose={() => setLegalModalType(null)} />
-      )}
+        {legalModalType && (
+          <LegalModal type={legalModalType} onClose={() => setLegalModalType(null)} />
+        )}
 
-      {qrModalBusiness && (
-        <QRCodeModal
-          business={qrModalBusiness}
-          onClose={() => setQrModalBusiness(null)}
-        />
-      )}
+        {qrModalBusiness && (
+          <QRCodeModal
+            business={qrModalBusiness}
+            onClose={() => setQrModalBusiness(null)}
+          />
+        )}
+
+        {/* Camera QR Scanner Modal */}
+        {scanQRModalOpen && (
+          <ScanQRModal
+            isOpen={scanQRModalOpen}
+            onClose={() => setScanQRModalOpen(false)}
+            currentUser={currentUser}
+            onSelectBusiness={handleSelectBusiness}
+            onUserUpdate={(updated) => setCurrentUser(updated)}
+          />
+        )}
+      </React.Suspense>
 
       {/* Floating QR Scanner Button (Desktop Only: hidden on mobile to prevent overlapping) */}
       <button
@@ -1011,17 +1042,6 @@ export default function App() {
           </span>
         </div>
       </button>
-
-      {/* Camera QR Scanner Modal */}
-      {scanQRModalOpen && (
-        <ScanQRModal
-          isOpen={scanQRModalOpen}
-          onClose={() => setScanQRModalOpen(false)}
-          currentUser={currentUser}
-          onSelectBusiness={handleSelectBusiness}
-          onUserUpdate={(updated) => setCurrentUser(updated)}
-        />
-      )}
 
       {/* Persistent Mobile Bottom Navigation (Smartphones & Small Tablets) */}
       <MobileBottomNav

@@ -1091,7 +1091,7 @@ export function executeCallNextCustomerInBot(
   businessId: string,
   actorUserId?: string,
   actorTgId?: string
-): { success: boolean; entry?: any; message: string } {
+): { success: boolean; entry?: any; message: string; isBooking?: boolean } {
   db.exec('BEGIN IMMEDIATE;');
   try {
     const nextWaiting = db.prepare(`

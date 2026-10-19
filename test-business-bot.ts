@@ -61,6 +61,9 @@ async function runBusinessBotTestSuite() {
   // Initialize DB tables
   initBusinessBotDatabase(db);
 
+  let createdBizId: string = '';
+  let srvId: string = '';
+  let ownerUserId: string = '';
   const testSuffix = Math.floor(Math.random() * 100000);
   const guestTgId = `tg_guest_${testSuffix}`;
   const applicantTgId = `tg_appl_${testSuffix}`;
@@ -68,71 +71,73 @@ async function runBusinessBotTestSuite() {
   const blockedTgId = `tg_blocked_${testSuffix}`;
   const testPhone = `+99893${Math.floor(1000000 + Math.random() * 8999999)}`;
   const testBizName = `Klinika Test ${testSuffix}`;
-
-  // -------------------------------------------------------------------------
-  // TEST 1: /start Buyrug'i va Autentifikatsiya Rollari
-  // -------------------------------------------------------------------------
-  console.log('🔹 1. /start buyrug‘i va foydalanuvchi holatlari tekshiruvi');
-  
-  // 1a. Guest
-  const guestAuth = getBusinessBotUserAuth(db, guestTgId);
-  assert(guestAuth.role === 'GUEST', 'Yangi foydalanuvchi GUEST sifatida aniqlanadi');
-
-  // 1b. Super Admin
-  const adminAuth = getBusinessBotUserAuth(db, superAdminTgId);
-  assert(adminAuth.role === 'SUPER_ADMIN', 'Bosh administrator SUPER_ADMIN sifatida aniqlanadi');
-
-  // 1c. Blocked user
-  db.prepare(`
-    INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id, telegram_user_id)
-    VALUES (?, 'Blocked User', ?, ?, 'hash', 'CUSTOMER', 'SUSPENDED', ?, ?)
-  `).run(`usr-bl-${testSuffix}`, `blocked_${testSuffix}@navbatbor.uz`, `+99899000${testSuffix.toString().slice(0, 4)}`, blockedTgId, blockedTgId);
-
-  const blockedAuth = getBusinessBotUserAuth(db, blockedTgId);
-  assert(blockedAuth.role === 'BLOCKED', 'Bloklangan foydalanuvchi BLOCKED roli bilan aniqlanadi va cheklanadi');
-
-  // -------------------------------------------------------------------------
-  // TEST 2: Yangi Biznes Arizasi Yuborilishi (Application Submission)
-  // -------------------------------------------------------------------------
-  console.log('\n🔹 2. Yangi biznes arizasi yuborilishi (Registration Flow)');
-
   const appId = `app-test-${testSuffix}`;
-  const cat = db.prepare('SELECT id FROM categories LIMIT 1').get() as any;
-  const city = db.prepare('SELECT id FROM cities LIMIT 1').get() as any;
 
-  db.prepare(`
-    INSERT INTO business_applications (
-      id, telegram_user_id, telegram_chat_id, telegram_username, business_name,
-      owner_name, owner_phone, category_id, city_id, district, address, description, status
-    ) VALUES (?, ?, ?, 'test_appl', ?, 'Dr. Alisher', ?, ?, ?, 'Markaz', 'Amir Temur ko‘chasi, 25', 'Stomatologiya', 'PENDING')
-  `).run(appId, applicantTgId, applicantTgId, testBizName, testPhone, cat?.id || 'cat-1', city?.id || 'city-1');
+  try {
+    // -------------------------------------------------------------------------
+    // TEST 1: /start Buyrug'i va Autentifikatsiya Rollari
+    // -------------------------------------------------------------------------
+    console.log('🔹 1. /start buyrug‘i va foydalanuvchi holatlari tekshiruvi');
+    
+    // 1a. Guest
+    const guestAuth = getBusinessBotUserAuth(db, guestTgId);
+    assert(guestAuth.role === 'GUEST', 'Yangi foydalanuvchi GUEST sifatida aniqlanadi');
 
-  const pendingAuth = getBusinessBotUserAuth(db, applicantTgId);
-  assert(pendingAuth.role === 'PENDING_APPLICANT', 'Ariza topshirgach, foydalanuvchi PENDING_APPLICANT bo‘ladi');
-  assert(pendingAuth.pendingApplication?.id === appId, 'Arizachiga o‘zining PENDING arizasi biriktirilgan');
+    // 1b. Super Admin
+    const adminAuth = getBusinessBotUserAuth(db, superAdminTgId);
+    assert(adminAuth.role === 'SUPER_ADMIN', 'Bosh administrator SUPER_ADMIN sifatida aniqlanadi');
 
-  // -------------------------------------------------------------------------
-  // TEST 3: Tasdiqlanmagan Foydalanuvchining Boshqaruvga Kira Olmasligi
-  // -------------------------------------------------------------------------
-  console.log('\n🔹 3. Tasdiqlanmagan foydalanuvchining boshqaruvga kira olmasligi');
+    // 1c. Blocked user
+    db.prepare(`
+      INSERT INTO users (id, name, email, phone, password_hash, role, status, telegram_chat_id, telegram_user_id)
+      VALUES (?, 'Blocked User', ?, ?, 'hash', 'CUSTOMER', 'SUSPENDED', ?, ?)
+    `).run(`usr-bl-${testSuffix}`, `blocked_${testSuffix}@navbatbor.uz`, `+99899000${testSuffix.toString().slice(0, 4)}`, blockedTgId, blockedTgId);
 
-  assert(pendingAuth.permissions.length === 0, 'PENDING holatidagi arizachida hech qanday boshqaruv ruxsati yo‘q');
-  assert(guestAuth.permissions.length === 0, 'Mehmon foydalanuvchida hech qanday boshqaruv ruxsati yo‘q');
+    const blockedAuth = getBusinessBotUserAuth(db, blockedTgId);
+    assert(blockedAuth.role === 'BLOCKED', 'Bloklangan foydalanuvchi BLOCKED roli bilan aniqlanadi va cheklanadi');
 
-  // -------------------------------------------------------------------------
-  // TEST 4: Admin Tasdig‘idan Keyin Boshqaruv Ochilishi (Super Admin Approval)
-  // -------------------------------------------------------------------------
-  console.log('\n🔹 4. Admin arizani tasdiqlashi va boshqaruv panelining ochilishi');
+    // -------------------------------------------------------------------------
+    // TEST 2: Yangi Biznes Arizasi Yuborilishi (Application Submission)
+    // -------------------------------------------------------------------------
+    console.log('\n🔹 2. Yangi biznes arizasi yuborilishi (Registration Flow)');
 
-  const approveRes = approveBusinessApplication(db, appId, superAdminTgId, 'usr-admin');
-  assert(approveRes.success === true, 'Admin arizani muvaffaqiyatli tasdiqladi');
-  assert(Boolean(approveRes.business?.id), 'Biznes muvaffaqiyatli yaratildi');
+    const cat = db.prepare('SELECT id FROM categories LIMIT 1').get() as any;
+    const city = db.prepare('SELECT id FROM cities LIMIT 1').get() as any;
 
-  const createdBizId = approveRes.business.id;
-  const approvedAuth = getBusinessBotUserAuth(db, applicantTgId);
-  assert(approvedAuth.role === 'BUSINESS_OWNER', 'Tasdiqlangandan so‘ng foydalanuvchi roli BUSINESS_OWNER ga aylandi');
-  assert(approvedAuth.business?.id === createdBizId, 'Egasiga aynan o‘z biznesi biriktirildi');
-  assert(approvedAuth.permissions.includes('ALL'), 'Biznes egasiga to‘liq boshqaruv ruxsatlari berildi');
+    db.prepare(`
+      INSERT INTO business_applications (
+        id, telegram_user_id, telegram_chat_id, telegram_username, business_name,
+        owner_name, owner_phone, category_id, city_id, district, address, description, status
+      ) VALUES (?, ?, ?, 'test_appl', ?, 'Dr. Alisher', ?, ?, ?, 'Markaz', 'Amir Temur ko‘chasi, 25', 'Stomatologiya', 'PENDING')
+    `).run(appId, applicantTgId, applicantTgId, testBizName, testPhone, cat?.id || 'cat-1', city?.id || 'city-1');
+
+    const pendingAuth = getBusinessBotUserAuth(db, applicantTgId);
+    assert(pendingAuth.role === 'PENDING_APPLICANT', 'Ariza topshirgach, foydalanuvchi PENDING_APPLICANT bo‘ladi');
+    assert(pendingAuth.pendingApplication?.id === appId, 'Arizachiga o‘zining PENDING arizasi biriktirilgan');
+
+    // -------------------------------------------------------------------------
+    // TEST 3: Tasdiqlanmagan Foydalanuvchining Boshqaruvga Kira Olmasligi
+    // -------------------------------------------------------------------------
+    console.log('\n🔹 3. Tasdiqlanmagan foydalanuvchining boshqaruvga kira olmasligi');
+
+    assert(pendingAuth.permissions.length === 0, 'PENDING holatidagi arizachida hech qanday boshqaruv ruxsati yo‘q');
+    assert(guestAuth.permissions.length === 0, 'Mehmon foydalanuvchida hech qanday boshqaruv ruxsati yo‘q');
+
+    // -------------------------------------------------------------------------
+    // TEST 4: Admin Tasdig‘idan Keyin Boshqaruv Ochilishi (Super Admin Approval)
+    // -------------------------------------------------------------------------
+    console.log('\n🔹 4. Admin arizani tasdiqlashi va boshqaruv panelining ochilishi');
+
+    const approveRes = approveBusinessApplication(db, appId, superAdminTgId, 'usr-admin');
+    assert(approveRes.success === true, 'Admin arizani muvaffaqiyatli tasdiqladi');
+    assert(Boolean(approveRes.business?.id), 'Biznes muvaffaqiyatli yaratildi');
+
+    createdBizId = approveRes.business.id;
+    ownerUserId = approveRes.ownerUser?.id || null;
+    const approvedAuth = getBusinessBotUserAuth(db, applicantTgId);
+    assert(approvedAuth.role === 'BUSINESS_OWNER', 'Tasdiqlangandan so‘ng foydalanuvchi roli BUSINESS_OWNER ga aylandi');
+    assert(approvedAuth.business?.id === createdBizId, 'Egasiga aynan o‘z biznesi biriktirildi');
+    assert(approvedAuth.permissions.includes('ALL'), 'Biznes egasiga to‘liq boshqaruv ruxsatlari berildi');
 
   // -------------------------------------------------------------------------
   // TEST 5: Har Bir Menyu Tugmasi Ishlashi (Exact 13 Buttons)
@@ -174,6 +179,7 @@ async function runBusinessBotTestSuite() {
   console.log('\n🔹 6. Botdan navbatga mijoz qo‘shish va sayt bilan sinxronizatsiya');
 
   const srv = db.prepare('SELECT id FROM services WHERE business_id = ? LIMIT 1').get(createdBizId) as any;
+  srvId = srv?.id || null;
   assert(Boolean(srv?.id), 'Biznes uchun standart xizmat mavjud');
 
   const sseBeforeCount = sseBroadcastEvents.length;
@@ -299,25 +305,32 @@ async function runBusinessBotTestSuite() {
   assert(linkedAuth.role === 'BUSINESS_OWNER', 'Bog‘langan hisob endi BUSINESS_OWNER sifatida ishlaydi');
   assert(linkedAuth.business?.id === createdBizId, 'Bog‘langan hisob biznesni boshqara oladi');
 
-  // Cleanup test records
-  db.exec('PRAGMA foreign_keys = OFF;');
-  db.prepare('DELETE FROM queue_entries WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM bookings WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM staff_services WHERE service_id = ?').run(srv.id);
-  db.prepare('DELETE FROM staff WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM services WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM business_hours WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM business_memberships WHERE business_id = ?').run(createdBizId);
-  db.prepare('DELETE FROM business_applications WHERE id = ? OR created_business_id = ?').run(appId, createdBizId);
-  db.prepare('DELETE FROM businesses WHERE id = ?').run(createdBizId);
-  db.prepare(`DELETE FROM user_sessions WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
-  db.prepare(`DELETE FROM notifications WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
-  db.prepare(`DELETE FROM users WHERE id IN (?, ?) OR id LIKE 'usr-walkin-%' OR email LIKE 'blocked_%'`).run(`usr-bl-${testSuffix}`, approveRes.ownerUser?.id || '');
-  db.exec('PRAGMA foreign_keys = ON;');
-
   console.log('\n======================================================');
   console.log(`🎉 BARCHA ${passedTests}/${totalTests} TA MAJBURIY TESTLAR MUVAFFAQIYATLI O‘TDI!`);
   console.log('======================================================\n');
+  } finally {
+    // Cleanup test records
+    db.exec('PRAGMA foreign_keys = OFF;');
+    if (createdBizId) {
+      db.prepare('DELETE FROM queue_entries WHERE business_id = ?').run(createdBizId);
+      db.prepare('DELETE FROM bookings WHERE business_id = ?').run(createdBizId);
+      if (srvId) {
+        db.prepare('DELETE FROM staff_services WHERE service_id = ?').run(srvId);
+      }
+      db.prepare('DELETE FROM staff WHERE business_id = ?').run(createdBizId);
+      db.prepare('DELETE FROM services WHERE business_id = ?').run(createdBizId);
+      db.prepare('DELETE FROM business_hours WHERE business_id = ?').run(createdBizId);
+      db.prepare('DELETE FROM business_memberships WHERE business_id = ?').run(createdBizId);
+      db.prepare('DELETE FROM businesses WHERE id = ?').run(createdBizId);
+    }
+    if (appId) {
+      db.prepare('DELETE FROM business_applications WHERE id = ? OR created_business_id = ?').run(appId, createdBizId || '');
+    }
+    db.prepare(`DELETE FROM user_sessions WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, ownerUserId || '');
+    db.prepare(`DELETE FROM notifications WHERE user_id IN (?, ?)`).run(`usr-bl-${testSuffix}`, ownerUserId || '');
+    db.prepare(`DELETE FROM users WHERE id IN (?, ?) OR id LIKE 'usr-walkin-%' OR email LIKE 'blocked_%'`).run(`usr-bl-${testSuffix}`, ownerUserId || '');
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
 }
 
 runBusinessBotTestSuite().catch(err => {

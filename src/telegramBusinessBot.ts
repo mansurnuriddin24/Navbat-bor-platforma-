@@ -24,7 +24,10 @@ export interface TelegramUserAuthInfo {
 
 export interface BusinessBotHooks {
   broadcastQueueUpdate?: (businessId: string, payload: any) => void;
-  notifyQueueCalled?: (entryId: string) => Promise<any>;
+  notifyQueueCalled?: (entryId: string, options?: { skipBusinessAlert?: boolean; isRecall?: boolean }) => Promise<any>;
+  notifyQueueServing?: (entryId: string) => Promise<any>;
+  notifyQueueCompleted?: (entryId: string) => Promise<any>;
+  notifyQueueCancelled?: (entryId: string, reason?: string) => Promise<any>;
   authenticateTelegramUser?: (tgId: string | null, info: { first_name?: string; last_name?: string; username?: string; phone?: string; name?: string }) => { token: string; user: any };
 }
 
@@ -1228,7 +1231,7 @@ export function executeCallNextCustomerInBot(
 
     try {
       if (botHooks.notifyQueueCalled) {
-        botHooks.notifyQueueCalled(nextWaiting.id).catch(err => {
+        botHooks.notifyQueueCalled(nextWaiting.id, { skipBusinessAlert: true }).catch(err => {
           console.error('[notifyQueueCalled Error]:', err?.message);
         });
       }
@@ -1293,6 +1296,7 @@ export function executeMarkCustomerServedInBot(
         entry: completedEntry,
         timestamp: Date.now()
       });
+      botHooks.notifyQueueCompleted?.(target.id);
     } catch (e) {
       console.error('[broadcastQueueUpdate Error]:', e);
     }
@@ -1347,6 +1351,7 @@ export function executeCancelQueueEntryInBot(
         entry: cancelledEntry,
         timestamp: Date.now()
       });
+      botHooks.notifyQueueCancelled?.(entryId, reason);
     } catch (e) {
       console.error('[broadcastQueueUpdate Error]:', e);
     }
@@ -1601,7 +1606,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       .run(user.id, token, sessionId);
 
     const appUrl = getBusinessPlatformAppUrl(db);
-    const returnUrl = `${appUrl}/?auth_session=${sessionId}`;
+    const returnUrl = `${appUrl}/?auth_session=${sessionId}#dashboard`;
     await sendBusinessBotMessage(
       chatId,
       `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSiz NavbatBor Biznes platformasiga Telegram (@${getBusinessBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
@@ -1670,7 +1675,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         .run(user.id, token, session.id);
 
       const appUrl = getBusinessPlatformAppUrl(db);
-      const returnUrl = `${appUrl}/?auth_session=${session.id}`;
+      const returnUrl = `${appUrl}/?auth_session=${session.id}#dashboard`;
       await sendBusinessBotMessage(
         chatId,
         `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib biznesingizni boshqarishingiz mumkin.`,
@@ -2192,9 +2197,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
           {
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
-                [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }],
-                [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${res.entry.id}` }],
+                [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${res.entry.id}` }, { text: '❌ Kelmadi', callback_data: `biz_q_noshow_${res.entry.id}` }],
+                [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }, { text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
                 [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
               ]
             }
@@ -2383,50 +2387,36 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       text === '/walkin'
     ) {
       if (!biz) return;
-      const todayCount = (db.prepare(`
-        SELECT count(*) as c FROM queue_entries
-        WHERE business_id = ? AND (date(joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(joined_at) >= datetime('now', '-18 hours'))
-      `).get(biz.id) as any)?.c || 0;
-      const letter = biz.name.charAt(0).toUpperCase() || 'A';
-      const qNum = `${letter}-${100 + todayCount + 1}`;
-      const newEntryId = 'qe-' + crypto.randomUUID().slice(0, 10);
-
       const firstService = db.prepare('SELECT id, name FROM services WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any;
-      const srvId = firstService?.id || null;
-      const srvName = firstService?.name || 'Jonli qabul';
+      const srvId = firstService?.id || (db.prepare('SELECT id, name FROM services WHERE business_id = ? LIMIT 1').get(biz.id) as any)?.id || 'srv-default';
 
-      db.prepare(`
-        INSERT INTO queue_entries (
-          id, business_id, service_id, customer_name, customer_phone,
-          queue_number, status, joined_at, called_source
-        ) VALUES (?, ?, ?, 'Jonli mijoz', '', ?, 'WAITING', CURRENT_TIMESTAMP, 'OPERATOR')
-      `).run(newEntryId, biz.id, srvId, qNum);
+      const res = addWalkinCustomerViaBot(db, {
+        businessId: biz.id,
+        customerName: 'Jonli mijoz',
+        serviceId: srvId,
+        createdUserId: auth.user?.id
+      });
 
-      try {
-        botHooks.broadcastQueueUpdate?.(biz.id, {
-          type: 'QUEUE_JOINED',
-          entry: { id: newEntryId, queue_number: qNum, customer_name: 'Jonli mijoz', service_name: srvName, status: 'WAITING' },
-          source: 'OPERATOR',
-          timestamp: new Date().toISOString()
-        });
-      } catch (e) {}
-
-      await sendBusinessBotMessage(
-        chatId,
-        `🎟 <b>Yangi mijoz navbatga qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n` +
-        `🎫 Chipta raqami: <b>#${qNum}</b>\n` +
-        `🏢 Muassasa: <b>${biz.name}</b>\n` +
-        `🩺 Xizmat: <b>${srvName}</b>\n` +
-        `⚡️ Holat: <b>Kutmoqda (WAITING)</b>\n━━━━━━━━━━━━━━━━\n` +
-        `<i>Ushbu chipta raqamini mijozga taqdim etishingiz mumkin.</i>`,
-        {
-          replyMarkup: {
-            inline_keyboard: [
-              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
-            ]
+      if (res.success && res.entry) {
+        await sendBusinessBotMessage(
+          chatId,
+          `🎟 <b>Yangi mijoz navbatga qo‘shildi!</b>\n━━━━━━━━━━━━━━━━\n` +
+          `🎫 Chipta raqami: <b>#${res.entry.queue_number}</b>\n` +
+          `🏢 Muassasa: <b>${biz.name}</b>\n` +
+          `🩺 Xizmat: <b>${firstService?.name || 'Jonli qabul'}</b>\n` +
+          `⚡️ Holat: <b>Kutmoqda (WAITING)</b>\n━━━━━━━━━━━━━━━━\n` +
+          `<i>Ushbu chipta raqamini mijozga taqdim etishingiz mumkin.</i>`,
+          {
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+              ]
+            }
           }
-        }
-      );
+        );
+      } else {
+        await sendBusinessBotMessage(chatId, `⚠️ ${res.message || 'Mijozni navbatga qo‘shishda xatolik yuz berdi.'}`);
+      }
       return;
     }
 
@@ -3032,8 +3022,8 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   // 10. LIVE QUEUE CALL NEXT
-  if (data.startsWith('biz_call_next_')) {
-    const bizId = data.replace('biz_call_next_', '');
+  if (data.startsWith('biz_call_next_') || data === 'biz_next_customer') {
+    const bizId = data.startsWith('biz_call_next_') ? data.replace('biz_call_next_', '') : (auth.business?.id || '');
     if (auth.business?.id !== bizId && auth.role !== 'SUPER_ADMIN') {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
       return;
@@ -3048,13 +3038,13 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
     await sendBusinessBotMessage(
       cbChatId,
       `📢 <b>MIJOZ CHAQIRILDI: #${res.entry.queue_number} — ${res.entry.customer_name}</b>\n` +
-      `Xizmat: <b>${res.entry.service_name || 'Xizmat'}</b>`,
+      `Xizmat: <b>${res.entry.service_name || 'Xizmat'}</b>\n` +
+      `📢 Mijozga Telegram orqali xabar jo‘natildi.`,
       {
         replyMarkup: {
           inline_keyboard: [
-            [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${res.entry.id}` }],
-            [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
-            [{ text: '❌ Kelmadi (No-show)', callback_data: `biz_q_noshow_${res.entry.id}` }],
+            [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${res.entry.id}` }, { text: '❌ Kelmadi', callback_data: `biz_q_noshow_${res.entry.id}` }],
+            [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }, { text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
             [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${bizId}` }]
           ]
         }
@@ -3064,8 +3054,8 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   // 11. SERVE / COMPLETE / NO-SHOW / CANCEL QUEUE ENTRY
-  if (data.startsWith('biz_q_serve_')) {
-    const entryId = data.replace('biz_q_serve_', '');
+  if (data.startsWith('biz_q_serve_') || data.startsWith('tg_accept_')) {
+    const entryId = data.replace('biz_q_serve_', '').replace('tg_accept_', '');
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
@@ -3081,20 +3071,22 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
         status: 'SERVING',
         timestamp: Date.now()
       });
+      botHooks.notifyQueueServing?.(entryId);
     } catch (e) {}
 
     await sendBusinessBotMessage(cbChatId, `🟢 <b>Xizmat ko‘rsatilmoqda: #${ent.queue_number} (${ent.customer_name})</b>`, {
       replyMarkup: {
         inline_keyboard: [
-          [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }]
+          [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
         ]
       }
     });
     return;
   }
 
-  if (data.startsWith('biz_recall_')) {
-    const entryId = data.replace('biz_recall_', '');
+  if (data.startsWith('biz_recall_') || data.startsWith('tg_recall_')) {
+    const entryId = data.replace('biz_recall_', '').replace('tg_recall_', '');
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
@@ -3110,23 +3102,23 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
         queue_number: ent.queue_number,
         timestamp: Date.now()
       });
-      botHooks.notifyQueueCalled?.(entryId);
+      botHooks.notifyQueueCalled?.(entryId, { skipBusinessAlert: true, isRecall: true });
     } catch (e) {}
 
     await sendBusinessBotMessage(cbChatId, `🔄 <b>Mijoz qayta chaqirildi: #${ent.queue_number} (${ent.customer_name})</b>`, {
       replyMarkup: {
         inline_keyboard: [
-          [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${entryId}` }],
+          [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${entryId}` }, { text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${entryId}` }],
           [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
-          [{ text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${entryId}` }]
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
         ]
       }
     });
     return;
   }
 
-  if (data.startsWith('biz_q_complete_')) {
-    const entryId = data.replace('biz_q_complete_', '');
+  if (data.startsWith('biz_q_complete_') || data.startsWith('tg_complete_')) {
+    const entryId = data.replace('biz_q_complete_', '').replace('tg_complete_', '');
     if (entryId.startsWith('qe-bkg-')) {
       const bkgPrefix = entryId.replace('qe-bkg-', '');
       try {
@@ -3150,8 +3142,8 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
     return;
   }
 
-  if (data.startsWith('biz_q_noshow_') || data.startsWith('biz_q_cancel_')) {
-    const entryId = data.replace('biz_q_noshow_', '').replace('biz_q_cancel_', '');
+  if (data.startsWith('biz_q_noshow_') || data.startsWith('biz_q_cancel_') || data.startsWith('tg_noshow_') || data.startsWith('tg_cancel_')) {
+    const entryId = data.replace('biz_q_noshow_', '').replace('biz_q_cancel_', '').replace('tg_noshow_', '').replace('tg_cancel_', '');
     if (entryId.startsWith('qe-bkg-')) {
       const bkgPrefix = entryId.replace('qe-bkg-', '');
       try {

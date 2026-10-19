@@ -1640,8 +1640,8 @@ function resolveCustomerTelegramChatId(entry: { id?: string; customer_id?: strin
   return null;
 }
 
-// 1. "Novbat kelganda" - Notifies customer that their turn has arrived
-async function notifyQueueCalled(entryId: string): Promise<boolean> {
+// 1. "Novbat kelganda / Qayta chaqirilganda" - Notifies customer that their turn has arrived
+async function notifyQueueCalled(entryId: string, options?: { skipBusinessAlert?: boolean; isRecall?: boolean }): Promise<boolean> {
   try {
     const entry = db.prepare(`
       SELECT q.*, b.name as business_name, b.slug as business_slug, b.address as business_address,
@@ -1671,11 +1671,14 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
       try {
         db.prepare(`
           INSERT INTO notifications (id, user_id, title, message, type)
-          VALUES (?, ?, '📢 Sizning navbatingiz keldi!', ?, 'QUEUE_CALLED')
+          VALUES (?, ?, ?, ?, 'QUEUE_CALLED')
         `).run(
           nId,
           entry.customer_id,
-          `Chipta #${entry.queue_number} (${entry.business_name}): Sizning navbatingiz yetib keldi! Iltimos, mutaxassis qabul xonasiga kiring.`
+          options?.isRecall ? '🔔 Qayta chaqiruv: Navbatingiz keldi!' : '📢 Sizning navbatingiz keldi!',
+          options?.isRecall
+            ? `Chipta #${entry.queue_number} (${entry.business_name}): Mutaxassis sizni qayta chaqirmoqda! Iltimos, zudlik bilan qabul xonasiga kiring.`
+            : `Chipta #${entry.queue_number} (${entry.business_name}): Sizning navbatingiz yetib keldi! Iltimos, mutaxassis qabul xonasiga kiring.`
         );
       } catch (e) {}
     }
@@ -1683,17 +1686,27 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
     // Telegram Alert to Customer
     let customerAlertSent = false;
     if (chatId) {
-      const result = await sendTelegramAlert({
-        chatId,
-        recipientType: 'CUSTOMER',
-        recipientId: entry.customer_id,
-        message: `📢 <b>Navbatingiz keldi! Iltimos, xizmat ko'rsatish joyiga keling.</b>\n\n` +
+      const messageText = options?.isRecall
+        ? `🔔 <b>QAYTA CHAQIRUV: Navbatingiz keldi!</b>\n━━━━━━━━━━━━━━━━\n` +
           `🎫 Navbat raqamingiz: <b>#${entry.queue_number}</b>\n` +
           `👤 Mijoz: <b>${entry.customer_name}</b>\n` +
           `🏢 Muassasa: <b>${entry.business_name}</b>\n` +
           `🩺 Xizmat: <b>${entry.service_name}</b>\n` +
           (entry.business_address ? `📍 <i>Manzil: ${entry.business_address}</i>\n` : '') +
-          `\nMutaxassis sizni kutmoqda!`,
+          `\n👉 <b>Mutaxassis sizni qayta chaqirmoqda! Iltimos, zudlik bilan qabul xonasiga kiring.</b>`
+        : `📢 <b>Navbatingiz keldi! Iltimos, xizmat ko'rsatish joyiga keling.</b>\n\n` +
+          `🎫 Navbat raqamingiz: <b>#${entry.queue_number}</b>\n` +
+          `👤 Mijoz: <b>${entry.customer_name}</b>\n` +
+          `🏢 Muassasa: <b>${entry.business_name}</b>\n` +
+          `🩺 Xizmat: <b>${entry.service_name}</b>\n` +
+          (entry.business_address ? `📍 <i>Manzil: ${entry.business_address}</i>\n` : '') +
+          `\nMutaxassis sizni kutmoqda!`;
+
+      const result = await sendTelegramAlert({
+        chatId,
+        recipientType: 'CUSTOMER',
+        recipientId: entry.customer_id,
+        message: messageText,
         replyMarkup: {
           inline_keyboard: [
             [{ text: '📱 Jonli tabloni ochish', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
@@ -1706,9 +1719,9 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
       console.log(`[Queue Alert] Customer chat_id not found for called entry ${entry.queue_number} (${entry.customer_name})`);
     }
 
-    // Also notify Business (group/channel or owner)
+    // Also notify Business (group/channel or owner) if not skipped
     const bizTarget = entry.biz_channel || entry.biz_tg;
-    if (bizTarget && bizTarget !== chatId) {
+    if (bizTarget && bizTarget !== chatId && !options?.skipBusinessAlert) {
       sendTelegramAlert({
         chatId: bizTarget,
         recipientType: 'BUSINESS',
@@ -1720,9 +1733,9 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
           `📢 Mijozga Telegram orqali xabar jo‘natildi.`,
         replyMarkup: {
           inline_keyboard: [
-            [{ text: '👤 Mijoz keldi (Qabul qilish)', callback_data: `tg_accept_${entry.id}` }, { text: '❌ Kelmadi', callback_data: `tg_noshow_${entry.id}` }],
-            [{ text: '✅ Xizmatni yakunlash', callback_data: `tg_complete_${entry.id}` }],
-            [{ text: '➡️ Keyingi mijozni chaqirish', callback_data: 'biz_next_customer' }]
+            [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${entry.id}` }, { text: '❌ Kelmadi', callback_data: `biz_q_noshow_${entry.id}` }],
+            [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${entry.id}` }, { text: '🏁 Yakunlash', callback_data: `biz_q_complete_${entry.id}` }],
+            [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${entry.business_id}` }]
           ]
         }
       }).catch(() => {});
@@ -1731,6 +1744,165 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
     return customerAlertSent;
   } catch (err) {
     console.error('Error in notifyQueueCalled:', err);
+    return false;
+  }
+}
+
+// 1b. "Qabul boshlanganda" - Notifies customer that they are now being served
+async function notifyQueueServing(entryId: string): Promise<boolean> {
+  try {
+    const entry = db.prepare(`
+      SELECT q.*, b.name as business_name, b.slug as business_slug,
+             s.name as service_name, u.name as user_name
+      FROM queue_entries q
+      JOIN businesses b ON q.business_id = b.id
+      JOIN services s ON q.service_id = s.id
+      LEFT JOIN users u ON q.customer_id = u.id
+      WHERE q.id = ?
+    `).get(entryId) as any;
+
+    if (!entry) return false;
+
+    // In-app notification
+    if (entry.customer_id) {
+      const nId = 'notif-' + crypto.randomUUID().slice(0, 8);
+      try {
+        db.prepare(`
+          INSERT INTO notifications (id, user_id, title, message, type)
+          VALUES (?, ?, '🟢 Qabulingiz boshlandi!', ?, 'QUEUE_SERVING')
+        `).run(
+          nId,
+          entry.customer_id,
+          `Chipta #${entry.queue_number} (${entry.business_name}): Sizning qabulingiz boshlandi. Mutaxassis sizga xizmat ko'rsatmoqda.`
+        );
+      } catch (e) {}
+    }
+
+    const chatId = resolveCustomerTelegramChatId(entry);
+    if (!chatId) return false;
+
+    const result = await sendTelegramAlert({
+      chatId,
+      recipientType: 'CUSTOMER',
+      recipientId: entry.customer_id,
+      message: `🟢 <b>Qabulingiz boshlandi!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🎫 Navbat raqamingiz: <b>#${entry.queue_number}</b>\n` +
+        `👤 Mijoz: <b>${entry.customer_name}</b>\n` +
+        `🏢 Muassasa: <b>${entry.business_name}</b>\n` +
+        `🩺 Xizmat: <b>${entry.service_name}</b>\n\n` +
+        `Mutaxassis sizga xizmat ko'rsatmoqda. Salomatlik tilaymiz!`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '📱 Jonli tabloni ochish', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
+        ]
+      }
+    });
+
+    return result.success;
+  } catch (err) {
+    console.error('Error in notifyQueueServing:', err);
+    return false;
+  }
+}
+
+// 1c. "Xizmat yakunlanganda" - Notifies customer that service has completed successfully
+async function notifyQueueCompleted(entryId: string): Promise<boolean> {
+  try {
+    const entry = db.prepare(`
+      SELECT q.*, b.name as business_name, b.slug as business_slug,
+             s.name as service_name, u.name as user_name
+      FROM queue_entries q
+      JOIN businesses b ON q.business_id = b.id
+      JOIN services s ON q.service_id = s.id
+      LEFT JOIN users u ON q.customer_id = u.id
+      WHERE q.id = ?
+    `).get(entryId) as any;
+
+    if (!entry) return false;
+
+    if (entry.customer_id) {
+      const nId = 'notif-' + crypto.randomUUID().slice(0, 8);
+      try {
+        db.prepare(`
+          INSERT INTO notifications (id, user_id, title, message, type)
+          VALUES (?, ?, '✅ Xizmatingiz yakunlandi!', ?, 'QUEUE_COMPLETED')
+        `).run(
+          nId,
+          entry.customer_id,
+          `Chipta #${entry.queue_number} (${entry.business_name}): Xizmatingiz muvaffaqiyatli yakunlandi. Rahmat!`
+        );
+      } catch (e) {}
+    }
+
+    const chatId = resolveCustomerTelegramChatId(entry);
+    if (!chatId) return false;
+
+    const result = await sendTelegramAlert({
+      chatId,
+      recipientType: 'CUSTOMER',
+      recipientId: entry.customer_id,
+      message: `✅ <b>Xizmatingiz muvaffaqiyatli yakunlandi!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🎫 Navbat raqamingiz: <b>#${entry.queue_number}</b>\n` +
+        `👤 Mijoz: <b>${entry.customer_name}</b>\n` +
+        `🏢 Muassasa: <b>${entry.business_name}</b>\n` +
+        `🩺 Xizmat: <b>${entry.service_name}</b>\n\n` +
+        `NavbatBor platformasidan foydalanganingiz uchun tashakkur! Salomat bo'ling.`
+    });
+
+    return result.success;
+  } catch (err) {
+    console.error('Error in notifyQueueCompleted:', err);
+    return false;
+  }
+}
+
+// 1d. "Bekor qilinganda / Kelmaganda" - Notifies customer that ticket was cancelled
+async function notifyQueueCancelled(entryId: string, reason?: string): Promise<boolean> {
+  try {
+    const entry = db.prepare(`
+      SELECT q.*, b.name as business_name, b.slug as business_slug,
+             s.name as service_name, u.name as user_name
+      FROM queue_entries q
+      JOIN businesses b ON q.business_id = b.id
+      JOIN services s ON q.service_id = s.id
+      LEFT JOIN users u ON q.customer_id = u.id
+      WHERE q.id = ?
+    `).get(entryId) as any;
+
+    if (!entry) return false;
+
+    if (entry.customer_id) {
+      const nId = 'notif-' + crypto.randomUUID().slice(0, 8);
+      try {
+        db.prepare(`
+          INSERT INTO notifications (id, user_id, title, message, type)
+          VALUES (?, ?, '❌ Navbatingiz bekor qilindi', ?, 'QUEUE_CANCELLED')
+        `).run(
+          nId,
+          entry.customer_id,
+          `Chipta #${entry.queue_number} (${entry.business_name}): Navbatingiz o'tkazib yuborildi / bekor qilindi.`
+        );
+      } catch (e) {}
+    }
+
+    const chatId = resolveCustomerTelegramChatId(entry);
+    if (!chatId) return false;
+
+    const result = await sendTelegramAlert({
+      chatId,
+      recipientType: 'CUSTOMER',
+      recipientId: entry.customer_id,
+      message: `❌ <b>Navbatingiz bekor qilindi (o'tkazib yuborildi)</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🎫 Navbat raqamingiz: <b>#${entry.queue_number}</b>\n` +
+        `🏢 Muassasa: <b>${entry.business_name}</b>\n` +
+        `🩺 Xizmat: <b>${entry.service_name}</b>\n` +
+        (reason ? `ℹ️ Sabab: <i>${reason}</i>\n\n` : '\n') +
+        `Qabulga kelmaganligingiz yoki muassasa tomonidan bekor qilinganligi sababli ushbu navbat o'tkazib yuborildi. Zarurat bo'lsa, yangi navbat olishingiz mumkin.`
+    });
+
+    return result.success;
+  } catch (err) {
+    console.error('Error in notifyQueueCancelled:', err);
     return false;
   }
 }
@@ -4115,7 +4287,14 @@ function broadcastQueueUpdate(businessId: string, payload: any) {
 }
 
 // Wire business bot real-time queue synchronization and auth hooks
-setBusinessBotHooks({ broadcastQueueUpdate, notifyQueueCalled, authenticateTelegramUser });
+setBusinessBotHooks({ 
+  broadcastQueueUpdate, 
+  notifyQueueCalled, 
+  notifyQueueServing, 
+  notifyQueueCompleted, 
+  notifyQueueCancelled, 
+  authenticateTelegramUser 
+});
 
 function getCurrentQueueState(businessId: string) {
   const current = db.prepare(`
@@ -5322,6 +5501,8 @@ app.post(['/api/operator/queue/accept', '/operator/queue/accept'], requireAuth, 
 
     db.prepare("UPDATE queue_entries SET status = 'SERVING', called_alert_sent = 1 WHERE id = ?").run(entry_id);
 
+    await notifyQueueServing(entry_id);
+
     broadcastQueueUpdate(entry.business_id, {
       type: 'QUEUE_STATUS_UPDATED',
       entryId: entry_id,
@@ -5354,6 +5535,8 @@ app.post(['/api/operator/queue/cancel', '/operator/queue/cancel'], requireAuth, 
     }
 
     db.prepare("UPDATE queue_entries SET status = 'CANCELLED' WHERE id = ?").run(entry_id);
+
+    await notifyQueueCancelled(entry_id, 'Operator tomonidan bekor qilindi');
 
     broadcastQueueUpdate(entry.business_id, {
       type: 'QUEUE_STATUS_UPDATED',
@@ -5398,6 +5581,8 @@ app.post(['/api/operator/queue/complete', '/operator/queue/complete'], requireAu
       employeeId: user.id,
       source: 'WEB'
     });
+
+    await notifyQueueCompleted(result.completedCustomer.id);
 
     broadcastQueueUpdate(bId, {
       type: 'QUEUE_STATUS_UPDATED',
@@ -5656,14 +5841,17 @@ app.post('/api/business/queue/:id/action', requireAuth, async (req, res) => {
     if (entry.called_alert_sent === 0 || entry.called_alert_sent === null) {
       await notifyQueueCalled(id);
     }
+    await notifyQueueServing(id);
     await checkAndNotifyNearQueue(entry.business_id);
   } else if (action === 'COMPLETE') {
     newStatus = 'COMPLETED';
     db.prepare("UPDATE queue_entries SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?").run(newStatus, id);
+    await notifyQueueCompleted(id);
     await checkAndNotifyNearQueue(entry.business_id);
   } else if (action === 'SKIP' || action === 'NO_SHOW') {
     newStatus = 'NO_SHOW';
     db.prepare("UPDATE queue_entries SET status = ?, no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(newStatus, id);
+    await notifyQueueCancelled(id, 'Mijoz kelmadi (No-Show)');
     await checkAndNotifyNearQueue(entry.business_id);
   }
 
@@ -8673,12 +8861,13 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
-    if (cbData && cbData.startsWith('tg_accept_')) {
-      const entryId = cbData.replace('tg_accept_', '');
+    if (cbData && (cbData.startsWith('tg_accept_') || cbData.startsWith('biz_q_serve_'))) {
+      const entryId = cbData.replace('tg_accept_', '').replace('biz_q_serve_', '');
       const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
       if (bizInfo) {
         try {
           db.prepare("UPDATE queue_entries SET status = 'SERVING', called_alert_sent = 1 WHERE id = ?").run(entryId);
+          await notifyQueueServing(entryId);
           const entry = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
           broadcastQueueUpdate(bizInfo.business.id, {
             type: 'QUEUE_STATUS_UPDATED',
@@ -8692,7 +8881,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             message: `👤 <b>Mijoz keldi (Qabul qilindi): #${entry?.queue_number || ''}</b>`,
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '✅ Xizmatni yakunlash', callback_data: `tg_complete_${entryId}` }],
+                [{ text: '✅ Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
                 [{ text: '➡️ Keyingi mijoz', callback_data: 'biz_next_customer' }]
               ]
             }
@@ -8704,12 +8893,13 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
-    if (cbData && cbData.startsWith('tg_cancel_')) {
-      const entryId = cbData.replace('tg_cancel_', '');
+    if (cbData && (cbData.startsWith('tg_cancel_') || cbData.startsWith('biz_q_cancel_'))) {
+      const entryId = cbData.replace('tg_cancel_', '').replace('biz_q_cancel_', '');
       const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
       if (bizInfo) {
         try {
           db.prepare("UPDATE queue_entries SET status = 'CANCELLED' WHERE id = ?").run(entryId);
+          await notifyQueueCancelled(entryId, 'Bekor qilindi');
           const entry = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
           broadcastQueueUpdate(bizInfo.business.id, {
             type: 'QUEUE_STATUS_UPDATED',
@@ -8850,8 +9040,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
-    if (cbData && cbData.startsWith('tg_complete_')) {
-      const entryId = cbData.replace('tg_complete_', '');
+    if (cbData && (cbData.startsWith('tg_complete_') || cbData.startsWith('biz_q_complete_'))) {
+      const entryId = cbData.replace('tg_complete_', '').replace('biz_q_complete_', '');
       const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
       if (bizInfo) {
         try {
@@ -8861,6 +9051,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             telegramUserId: cbUserId,
             source: 'TELEGRAM'
           });
+          await notifyQueueCompleted(res.completedCustomer.id);
           broadcastQueueUpdate(bizInfo.business.id, {
             type: 'SERVICE_COMPLETED',
             completed: res.completedCustomer,
@@ -8882,8 +9073,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
-    if (cbData && cbData.startsWith('tg_noshow_')) {
-      const entryId = cbData.replace('tg_noshow_', '');
+    if (cbData && (cbData.startsWith('tg_noshow_') || cbData.startsWith('biz_q_noshow_'))) {
+      const entryId = cbData.replace('tg_noshow_', '').replace('biz_q_noshow_', '');
       const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
       if (bizInfo) {
         try {
@@ -8893,6 +9084,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             telegramUserId: cbUserId,
             source: 'TELEGRAM'
           });
+          await notifyQueueCancelled(res.customer.id, 'Mijoz kelmadi (No-Show)');
           broadcastQueueUpdate(bizInfo.business.id, {
             type: 'CUSTOMER_NO_SHOW',
             customer: res.customer,
@@ -8915,32 +9107,23 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // Recall customer with priority alert
-    if (cbData && cbData.startsWith('tg_recall_')) {
-      const entryId = cbData.replace('tg_recall_', '');
+    if (cbData && (cbData.startsWith('tg_recall_') || cbData.startsWith('biz_recall_'))) {
+      const entryId = cbData.replace('tg_recall_', '').replace('biz_recall_', '');
       const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
       if (bizInfo) {
         try {
+          await notifyQueueCalled(entryId, { isRecall: true, skipBusinessAlert: true });
           const entry = db.prepare('SELECT q.*, b.name as business_name FROM queue_entries q JOIN businesses b ON q.business_id = b.id WHERE q.id = ?').get(entryId) as any;
-          if (entry) {
-            if (entry.telegram_chat_id) {
-              await sendTelegramAlert({
-                chatId: entry.telegram_chat_id,
-                recipientType: 'CUSTOMER',
-                recipientId: entry.customer_id,
-                message: `📢 <b>QAYTA CHAQIRUV! NAVBATINGIZ KELDI!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta: <b>#${entry.queue_number}</b>\n🏢 Muassasa: <b>${entry.business_name}</b>\n\nIltimos, zudlik bilan mutaxassis qabul xonasiga kiring!`
-              });
+          await sendTelegramAlert({
+            chatId: cbChatId,
+            message: `📢 <b>#${entry?.queue_number || ''} mijozga qayta chaqiruv xabari yuborildi!</b>`,
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `biz_q_serve_${entryId}` }, { text: '❌ Kelmadi', callback_data: `biz_q_noshow_${entryId}` }],
+                [{ text: '🟢 Keyingi mijoz', callback_data: 'biz_next_customer' }]
+              ]
             }
-            await sendTelegramAlert({
-              chatId: cbChatId,
-              message: `📢 <b>#${entry.queue_number} mijozga qayta chaqiruv xabari yuborildi!</b>`,
-              replyMarkup: {
-                inline_keyboard: [
-                  [{ text: '✅ Mijoz keldi (Xizmatda)', callback_data: `tg_accept_${entry.id}` }, { text: '❌ Kelmadi', callback_data: `tg_noshow_${entry.id}` }],
-                  [{ text: '🟢 Keyingi mijoz', callback_data: 'biz_next_customer' }]
-                ]
-              }
-            });
-          }
+          });
         } catch (e: any) {
           await sendTelegramAlert({ chatId: cbChatId, message: `⚠️ ${e.message}` });
         }
@@ -10818,7 +11001,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
       db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
         .run(user.id, token, sessionId);
 
-      const returnUrl = `${appUrl}/?auth_session=${sessionId}`;
+      const targetHash = (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') ? '#dashboard' : (['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(user.role) ? '#admin' : '#customer');
+      const returnUrl = `${appUrl}/?auth_session=${sessionId}${targetHash}`;
       await sendTelegramAlert({
         chatId,
         message: `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${from.first_name || user.name}</b>!\n\nSiz NavbatBor platformasiga Telegram (@${getBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
@@ -10863,7 +11047,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
         db.prepare("UPDATE telegram_auth_sessions SET status = 'CONFIRMED', user_id = ?, token = ? WHERE id = ?")
           .run(user.id, token, session.id);
 
-        const returnUrl = `${appUrl}/?auth_session=${session.id}`;
+        const targetCodeHash = (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') ? '#dashboard' : (['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(user.role) ? '#admin' : '#customer');
+        const returnUrl = `${appUrl}/?auth_session=${session.id}${targetCodeHash}`;
         await sendTelegramAlert({
           chatId,
           message: `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${from.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib xizmatlardan foydalanishingiz mumkin.`,

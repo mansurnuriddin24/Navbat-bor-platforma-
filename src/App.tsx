@@ -118,6 +118,22 @@ export default function App() {
     const directToken = searchParams.get('token') || searchParams.get('tg_token');
     const authError = searchParams.get('auth_error');
 
+    const navigateUserToPanel = (u: User) => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#display') || hash.startsWith('#tablo') || hash.startsWith('#screen') || hash.startsWith('#business/')) {
+        return;
+      }
+      if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') {
+        setActiveView('business-dashboard');
+      } else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') {
+        setActiveView('operating-partner');
+      } else if (['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) {
+        setActiveView('admin-panel');
+      } else {
+        setActiveView('customer-dashboard');
+      }
+    };
+
     const cleanCurrentUrl = () => {
       const cleanUrl = window.location.pathname + (window.location.hash || '');
       window.history.replaceState({}, document.title, cleanUrl);
@@ -127,7 +143,10 @@ export default function App() {
       setStoredToken(directToken);
       cleanCurrentUrl();
       api.getMe().then((res) => {
-        if (res?.user) setCurrentUser(res.user);
+        if (res?.user) {
+          setCurrentUser(res.user);
+          navigateUserToPanel(res.user);
+        }
       }).catch(() => {});
     } else if (authSessionId) {
       // Automatic login upon returning from Telegram bot via "Saytga o‘tish" link
@@ -137,6 +156,7 @@ export default function App() {
           if (res.status === 'CONFIRMED' && res.token && res.user) {
             setStoredToken(res.token);
             setCurrentUser(res.user);
+            navigateUserToPanel(res.user);
             try {
               await api.consumeTelegramAuthSession(authSessionId);
             } catch (e) {}
@@ -361,6 +381,25 @@ export default function App() {
 
       if (hash === '#admin' || hash === '#admin-panel' || path === '/admin') {
         setActiveView('admin-panel');
+        return;
+      }
+
+      if (hash === '#dashboard' || hash === '#business-dashboard' || hash === '#biznes') {
+        if (currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF') {
+          setActiveView('business-dashboard');
+        } else {
+          setActiveView('customer-dashboard');
+        }
+        return;
+      }
+
+      if (hash === '#customer' || hash === '#customer-dashboard' || hash === '#profile' || hash === '#cabinet' || hash === '#kabinet' || hash === '#my-bookings' || hash === '#queue') {
+        setActiveView('customer-dashboard');
+        return;
+      }
+
+      if (hash === '#partner' || hash === '#operating-partner') {
+        setActiveView('operating-partner');
         return;
       }
 

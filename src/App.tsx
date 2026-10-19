@@ -345,27 +345,15 @@ export default function App() {
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash;
-      if (hash.startsWith('#display/')) {
-        const token = hash.replace('#display/', '');
-        setDisplayToken(token);
-        setActiveView('live-display');
-        return;
-      }
-      if (hash.startsWith('#screen/')) {
-        const token = hash.replace('#screen/', '');
-        setDisplayToken(token);
-        setActiveView('live-display');
-        return;
-      }
-      if (hash.startsWith('#tv/')) {
-        const token = hash.replace('#tv/', '');
+      if (hash.startsWith('#display/') || hash.startsWith('#screen/') || hash.startsWith('#tv/') || hash.startsWith('#tablo/')) {
+        const token = hash.replace(/^#(display|screen|tv|tablo)\//, '').split('?')[0];
         setDisplayToken(token);
         setActiveView('live-display');
         return;
       }
       const path = window.location.pathname;
-      if (path.startsWith('/display/')) {
-        const token = path.replace('/display/', '');
+      if (path.startsWith('/display/') || path.startsWith('/tablo/')) {
+        const token = path.replace(/^\/(display|tablo)\//, '').split('?')[0];
         setDisplayToken(token);
         setActiveView('live-display');
         return;
@@ -377,7 +365,12 @@ export default function App() {
       }
 
       if (hash.startsWith('#business/')) {
-        const slug = hash.replace('#business/', '');
+        const slug = hash.replace('#business/', '').split('?')[0];
+        if (window.location.hash.includes('tab=tablo') || window.location.search.includes('tab=tablo') || window.location.hash.includes('view=tablo')) {
+          setDisplayToken(slug);
+          setActiveView('live-display');
+          return;
+        }
         setSelectedBusinessSlug(slug);
         setActiveView('business-detail');
       }
@@ -385,7 +378,7 @@ export default function App() {
     handleHash();
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
+  }, [currentUser, selectedBusinessSlug]);
 
   // TV / Smart TV Live Display View Mode (FullScreen, No Navbar/Footer clutter)
   if (activeView === 'live-display' && displayToken) {
@@ -395,7 +388,11 @@ export default function App() {
           token={displayToken}
           onClose={() => {
             window.location.hash = '';
-            setActiveView(currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF' ? 'business-dashboard' : 'home');
+            if (selectedBusinessSlug) {
+              setActiveView('business-detail');
+            } else {
+              setActiveView(currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF' ? 'business-dashboard' : 'home');
+            }
           }}
         />
       </React.Suspense>

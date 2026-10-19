@@ -290,7 +290,7 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
   return (
     <div 
       ref={containerRef}
-      className={`fixed inset-0 z-50 bg-[#070d18] text-white flex flex-col font-sans select-none overflow-hidden transition-colors duration-500 ${
+      className={`fixed inset-0 z-50 bg-[#070d18] text-white flex flex-col font-sans select-none overflow-y-auto lg:overflow-hidden transition-colors duration-500 ${
         isFlashing ? 'ring-8 ring-emerald-500/80 ring-inset' : ''
       }`}
     >
@@ -298,41 +298,41 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
       {!audioUnlocked && (
         <div 
           onClick={unlockAudio}
-          className="bg-gradient-to-r from-amber-600 via-emerald-600 to-blue-600 px-6 py-2.5 text-center text-sm font-black tracking-wide text-white cursor-pointer shadow-lg flex items-center justify-center gap-3 animate-pulse hover:opacity-95 transition"
+          className="bg-gradient-to-r from-amber-600 via-emerald-600 to-blue-600 px-4 sm:px-6 py-2 text-center text-xs sm:text-sm font-black tracking-wide text-white cursor-pointer shadow-lg flex items-center justify-center gap-2 sm:gap-3 animate-pulse hover:opacity-95 transition"
         >
-          <BellRing className="w-5 h-5 animate-bounce" />
-          <span>🔊 Smart TV ovozli chaqirishni yoqish uchun ekranni yoki pultdagi OK tugmasini bosing!</span>
-          <span className="px-3 py-1 bg-white/20 rounded-full text-xs font-bold uppercase tracking-widest">Faollashtirish</span>
+          <BellRing className="w-4 h-4 sm:w-5 sm:h-5 animate-bounce" />
+          <span>🔊 Ovozli chaqirishni yoqish uchun bosing!</span>
+          <span className="px-2.5 py-0.5 bg-white/20 rounded-full text-[10px] sm:text-xs font-bold uppercase tracking-widest">Faollashtirish</span>
         </div>
       )}
 
-      {/* 1. TOP HEADER (16:9 TV Header) */}
-      <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-8 py-4 flex items-center justify-between shadow-2xl">
+      {/* 1. TOP HEADER (16:9 TV & Mobile Responsive Header) */}
+      <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 lg:px-8 py-2.5 sm:py-4 flex items-center justify-between shadow-2xl shrink-0">
         {/* Left: Business Branding */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
           {data?.business.logo_url ? (
             <img 
               src={data.business.logo_url} 
               alt={data.business.name} 
-              className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-700 shadow-md bg-white/5" 
+              className="w-9 h-9 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl object-cover border border-slate-700 shadow-md bg-white/5 shrink-0" 
             />
           ) : (
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-black text-2xl shadow-md border border-white/10">
+            <div className="w-9 h-9 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-black text-lg sm:text-2xl shadow-md border border-white/10 shrink-0">
               {data?.business.name?.slice(0, 1) || 'N'}
             </div>
           )}
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl lg:text-3xl font-black text-white tracking-tight">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-base sm:text-2xl lg:text-3xl font-black text-white tracking-tight truncate max-w-[130px] sm:max-w-[280px] lg:max-w-none">
                 {data?.business.name}
               </h1>
-              <span className="px-3 py-1 rounded-xl bg-blue-950/80 border border-blue-500/30 text-blue-400 text-xs font-black uppercase tracking-wider">
+              <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-xl bg-blue-950/80 border border-blue-500/30 text-blue-400 text-[10px] sm:text-xs font-black uppercase tracking-wider">
                 {data?.screen.name || 'Jonli Tablo'}
               </span>
             </div>
-            <p className="text-slate-400 text-xs lg:text-sm mt-0.5 flex items-center gap-2">
-              <Building2 className="w-3.5 h-3.5 text-slate-500" />
-              <span>{data?.business.address || 'Qarshi shahri'}</span>
+            <p className="text-slate-400 text-[10px] sm:text-xs lg:text-sm mt-0.5 flex items-center gap-1.5 truncate">
+              <Building2 className="w-3 h-3 text-slate-500 shrink-0" />
+              <span className="truncate">{data?.business.address || 'Qarshi shahri'}</span>
             </p>
           </div>
         </div>
@@ -354,45 +354,45 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
         </div>
 
         {/* Right: Clock & TV Controls */}
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-1.5 sm:gap-4">
           {/* Digital Clock */}
-          <div className="flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-slate-800/90 border border-slate-700 shadow-inner text-white font-mono">
-            <Clock className="w-5 h-5 text-blue-400" />
-            <span className="text-2xl font-black tracking-widest">{currentTime}</span>
+          <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl sm:rounded-2xl bg-slate-800/90 border border-slate-700 shadow-inner text-white font-mono">
+            <Clock className="w-3.5 h-3.5 sm:w-5 sm:h-5 text-blue-400" />
+            <span className="text-sm sm:text-xl lg:text-2xl font-black tracking-wider sm:tracking-widest">{currentTime}</span>
           </div>
 
           {/* Quick TV Control Buttons */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <button
               onClick={() => {
                 if (!audioUnlocked) unlockAudio();
                 setSoundEnabled(!soundEnabled);
               }}
-              className={`p-3 rounded-2xl border transition cursor-pointer ${
+              className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border transition cursor-pointer ${
                 soundEnabled && audioUnlocked 
                   ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-400 hover:bg-emerald-600/30' 
                   : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
               }`}
               title={soundEnabled ? 'Ovoz yoqilgan' : 'Ovoz o‘chirilgan'}
             >
-              {soundEnabled && audioUnlocked ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+              {soundEnabled && audioUnlocked ? <Volume2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <VolumeX className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
 
             <button
               onClick={toggleFullscreen}
-              className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition cursor-pointer"
+              className="p-2 sm:p-3 rounded-xl sm:rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition cursor-pointer"
               title="To‘liq ekran (Fullscreen)"
             >
-              {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+              {isFullscreen ? <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
 
             {onClose && (
               <button
                 onClick={onClose}
-                className="p-3 rounded-2xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 transition cursor-pointer"
+                className="p-2 sm:p-3 rounded-xl sm:rounded-2xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 transition cursor-pointer"
                 title="Yopish"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             )}
           </div>
@@ -400,38 +400,38 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
       </header>
 
       {/* 2. MAIN 16:9 SPLIT DISPLAY CONTENT */}
-      <main className="flex-1 p-6 lg:p-8 grid grid-cols-12 gap-6 lg:gap-8 overflow-hidden min-h-0">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 grid grid-cols-12 gap-4 sm:gap-6 lg:gap-8 overflow-y-auto lg:overflow-hidden min-h-0">
         
         {/* LEFT / HERO SECTION: CURRENTLY CALLED TICKET (7 Cols) */}
-        <section className="col-span-12 lg:col-span-7 flex flex-col gap-6 h-full justify-between">
+        <section className="col-span-12 lg:col-span-7 flex flex-col gap-4 sm:gap-6 lg:h-full justify-between">
           
           {/* Main Calling Spotlight Card */}
-          <div className="flex-1 bg-gradient-to-b from-slate-900/90 via-slate-900/70 to-slate-950/90 border-2 border-slate-800 rounded-3xl p-8 lg:p-10 flex flex-col justify-between shadow-2xl relative overflow-hidden">
+          <div className="flex-1 bg-gradient-to-b from-slate-900/90 via-slate-900/70 to-slate-950/90 border-2 border-slate-800 rounded-3xl p-5 sm:p-8 lg:p-10 flex flex-col justify-between shadow-2xl relative overflow-hidden">
             {/* Ambient Spotlight Glow */}
             <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/10 blur-3xl pointer-events-none rounded-full" />
             <div className="absolute bottom-0 left-0 w-80 h-80 bg-blue-500/10 blur-3xl pointer-events-none rounded-full" />
 
             {/* Sub-header */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4 relative z-10">
-              <div className="flex items-center gap-3">
-                <span className="w-4 h-4 rounded-full bg-emerald-500 animate-ping inline-block" />
-                <h2 className="text-lg lg:text-xl font-black uppercase tracking-widest text-emerald-400">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 sm:pb-4 relative z-10">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <span className="w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-emerald-500 animate-ping inline-block" />
+                <h2 className="text-sm sm:text-lg lg:text-xl font-black uppercase tracking-wider sm:tracking-widest text-emerald-400">
                   HOZIR CHAQIRILAYOTGAN NAVBAT
                 </h2>
               </div>
               {primaryCalled && (
-                <span className="px-4 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs lg:text-sm font-black uppercase tracking-wider animate-pulse">
+                <span className="px-3 sm:px-4 py-1 sm:py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] sm:text-xs lg:text-sm font-black uppercase tracking-wider animate-pulse">
                   {primaryCalled.status === 'CALLED' ? '📢 CHAQIRILDI' : '⚡️ QABULDA'}
                 </span>
               )}
             </div>
 
             {/* Giant Center Ticket Number */}
-            <div className="my-auto py-6 text-center relative z-10">
+            <div className="my-auto py-4 sm:py-6 text-center relative z-10">
               {primaryCalled ? (
-                <div className="space-y-4">
-                  <div className="inline-block px-10 py-4 rounded-3xl bg-slate-950/80 border-4 border-emerald-500 shadow-2xl shadow-emerald-500/30 transition-transform duration-300 transform scale-100 hover:scale-[1.02]">
-                    <span className="text-8xl lg:text-[11rem] font-black tracking-tight text-white leading-none drop-shadow-[0_10px_20px_rgba(16,185,129,0.4)]">
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="inline-block px-5 sm:px-10 py-2 sm:py-4 rounded-3xl bg-slate-950/80 border-2 sm:border-4 border-emerald-500 shadow-2xl shadow-emerald-500/30 transition-transform duration-300 transform scale-100 hover:scale-[1.02]">
+                    <span className="text-6xl sm:text-8xl lg:text-[11rem] font-black tracking-tight text-white leading-none drop-shadow-[0_10px_20px_rgba(16,185,129,0.4)]">
                       {primaryCalled.queue_number}
                     </span>
                   </div>
@@ -491,7 +491,7 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
         </section>
 
         {/* RIGHT SECTION: UPCOMING WAITING QUEUES (5 Cols) */}
-        <section className="col-span-12 lg:col-span-5 h-full flex flex-col bg-slate-900/90 border-2 border-slate-800 rounded-3xl p-6 lg:p-8 shadow-2xl overflow-hidden">
+        <section className="col-span-12 lg:col-span-5 min-h-[350px] lg:h-full flex flex-col bg-slate-900/90 border-2 border-slate-800 rounded-3xl p-4 sm:p-6 lg:p-8 shadow-2xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
             <div className="flex items-center gap-3">

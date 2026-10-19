@@ -938,6 +938,33 @@ function getPlatformAppUrl(): string {
   return 'https://navbatbor.uz';
 }
 
+function getBusinessDisplayUrl(businessId?: string, businessSlug?: string): string {
+  const appUrl = getPlatformAppUrl();
+  let screen: any = null;
+  if (businessId) {
+    screen = db.prepare('SELECT display_token FROM business_screens WHERE business_id = ? AND is_active = 1 ORDER BY created_at ASC LIMIT 1').get(businessId) as any;
+  }
+  if (!screen && businessSlug) {
+    const biz = db.prepare('SELECT id FROM businesses WHERE slug = ?').get(businessSlug) as any;
+    if (biz) {
+      screen = db.prepare('SELECT display_token FROM business_screens WHERE business_id = ? AND is_active = 1 ORDER BY created_at ASC LIMIT 1').get(biz.id) as any;
+    }
+  }
+  if (!screen && businessId) {
+    const defaultScreenId = 'scr_' + crypto.randomBytes(6).toString('hex');
+    const defaultToken = 'disp_' + crypto.randomBytes(16).toString('hex');
+    try {
+      db.prepare(`
+        INSERT INTO business_screens (id, business_id, name, display_token, service_ids, room_name, is_active)
+        VALUES (?, ?, ?, ?, '[]', '1-xona', 1)
+      `).run(defaultScreenId, businessId, 'Asosiy Zal Tablosi', defaultToken);
+      screen = { display_token: defaultToken };
+    } catch (e) {}
+  }
+  const token = screen?.display_token || businessSlug || businessId;
+  return `${appUrl}/#display/${token}`;
+}
+
 // Backfill GPS coordinates for businesses in Qarshi
 try {
   db.prepare(`UPDATE businesses SET latitude = 38.8615, longitude = 65.7920 WHERE (slug = 'nasaf-stomatologiya-markazi' OR id = 'biz-nasaf-dental') AND (latitude IS NULL OR latitude = 0)`).run();
@@ -1669,7 +1696,7 @@ async function notifyQueueCalled(entryId: string): Promise<boolean> {
           `\nMutaxassis sizni kutmoqda!`,
         replyMarkup: {
           inline_keyboard: [
-            [{ text: '📱 Jonli tabloni ochish', web_app: { url: `${appUrl}/#business/${entry.business_slug}` } }]
+            [{ text: '📱 Jonli tabloni ochish', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
           ]
         }
       });
@@ -1784,7 +1811,7 @@ async function checkAndNotifyNearQueue(businessId: string): Promise<void> {
               `👉 <i>Iltimos, o‘z navbatingizni o‘tkazib yubormaslik uchun qabul xonasi yaqinida hozir bo‘ling!</i>`,
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '📱 Jonli navbat holatini ko‘rish', web_app: { url: `${appUrl}/#business/${entry.business_slug}` } }]
+                [{ text: '📱 Jonli navbat holatini ko‘rish', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
               ]
             }
           });
@@ -3303,7 +3330,12 @@ app.post('/api/queue/join', (req, res) => {
       chatId: customerChatId,
       recipientType: 'CUSTOMER',
       recipientId: user.id,
-      message: `🎟 <b>NavbatBor: Jonli navbat olindi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqamingiz: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Navbatingiz kelganda va oz qolganda sizga ushbu bot orqali darhol xabar yuboramiz.</i>`
+      message: `🎟 <b>NavbatBor: Jonli navbat olindi!</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqamingiz: <b>${queueNumber}</b>\n🏢 Muassasa: <b>${qBizInfo?.business_name || 'Muassasa'}</b>\n🩺 Xizmat: <b>${qServiceInfo?.name || 'Xizmat'}</b>\n━━━━━━━━━━━━━━━━\n<i>Navbatingiz kelganda va oz qolganda sizga ushbu bot orqali darhol xabar yuboramiz.</i>`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '📱 Jonli navbat holatini ko‘rish', web_app: { url: getBusinessDisplayUrl(business_id, qBizInfo?.slug) } }]
+        ]
+      }
     });
   }
 
@@ -9111,7 +9143,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             `• Navbatingiz kelganda chaqiruv xabarini yuboramiz.`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '📱 Jonli tabloga o‘tish', web_app: { url: `${appUrl}/#business/${biz.slug}` } }],
+              [{ text: '📱 Jonli tabloga o‘tish', web_app: { url: getBusinessDisplayUrl(biz.id, biz.slug) } }],
               [{ text: '❌ Navbatni bekor qilish', callback_data: `cancel_my_queue_${newEntryId}` }]
             ]
           }
@@ -11034,7 +11066,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
               `👉 <b>Iltimos, mutaxassis qabul xonasiga kiring!</b> Mutaxassis sizni kutmoqda.`,
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '📱 Jonli tabloga o‘tish', web_app: { url: `${appUrl}/#business/${entry.business_slug}` } }]
+                [{ text: '📱 Jonli tabloga o‘tish', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
               ]
             }
           });
@@ -11077,7 +11109,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
               `• Navbatingiz yetib kelganda darhol chaqiruv xabarini olasiz.`,
             replyMarkup: {
               inline_keyboard: [
-                [{ text: '📱 Jonli navbat holati', web_app: { url: `${appUrl}/#business/${entry.business_slug}` } }]
+                [{ text: '📱 Jonli navbat holati', web_app: { url: getBusinessDisplayUrl(entry.business_id, entry.business_slug) } }]
               ]
             }
           });
@@ -11365,7 +11397,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
           message: `🎟 <b>Sizning Jonli Navbatingiz</b>\n━━━━━━━━━━━━━━━━\n🎫 Chipta raqami: <b>${activeQueue.queue_number}</b>\n🏢 Muassasa: <b>${activeQueue.business_name}</b>\n🩺 Xizmat: <b>${activeQueue.service_name || 'Xizmat'}</b>\n📍 Manzil: ${activeQueue.address || 'Qarshi shahri'}\n\n📊 Status: <b>${activeQueue.status === 'CALLED' ? '🔴 SIZNING NAVBATINGIZ KELDI!' : '🟡 Kutilmoqda'}</b>\n👥 Sizdan oldinda: <b>${waitingAhead} kishi</b>`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '📱 Jonli tabloni kuzatish', web_app: { url: `${appUrl}/#business/${activeQueue.business_slug}` } }],
+              [{ text: '📱 Jonli tabloni kuzatish', web_app: { url: getBusinessDisplayUrl(activeQueue.business_id, activeQueue.business_slug) } }],
               [{ text: '❌ Navbatni bekor qilish', callback_data: `cancel_my_queue_${activeQueue.id}` }]
             ]
           }
@@ -11690,8 +11722,7 @@ app.post('/api/queue/:id/send-to-telegram', async (req, res) => {
     }
   } catch (e) {}
 
-  const appUrl = getPlatformAppUrl();
-  const liveUrl = `${appUrl}/#business/${entry.business_slug}`;
+  const liveUrl = getBusinessDisplayUrl(entry.business_id, entry.business_slug);
 
   const message = `🎟 <b>NavbatBor: Sizning Elektron Chiptangiz</b>\n━━━━━━━━━━━━━━━━\n` +
     `🎫 Chipta raqami: <b>${entry.queue_number}</b>\n` +
@@ -14015,12 +14046,37 @@ app.get('/api/public-queue/:slug', (req, res) => {
 // LIVE QUEUE DISPLAY (SMART TV / ANDROID TV BOX) MODULE
 // ==========================================
 
-function getDisplayQueueData(token: string) {
-  const screen = db.prepare('SELECT * FROM business_screens WHERE display_token = ?').get(token) as any;
-  if (!screen || !screen.is_active) return null;
+function getDisplayQueueData(tokenOrSlug: string) {
+  const cleanKey = (tokenOrSlug || '').trim();
+  if (!cleanKey) return null;
 
-  const biz = db.prepare('SELECT id, name, slug, address, phone, logo_url FROM businesses WHERE id = ?').get(screen.business_id) as any;
-  if (!biz) return null;
+  let screen = db.prepare('SELECT * FROM business_screens WHERE display_token = ?').get(cleanKey) as any;
+  let biz: any = null;
+
+  if (screen) {
+    if (!screen.is_active) return null;
+    biz = db.prepare('SELECT id, name, slug, address, phone, logo_url FROM businesses WHERE id = ?').get(screen.business_id) as any;
+  } else {
+    // Check if cleanKey is business slug or ID
+    biz = db.prepare('SELECT id, name, slug, address, phone, logo_url FROM businesses WHERE slug = ? OR id = ?').get(cleanKey, cleanKey) as any;
+    if (biz) {
+      screen = db.prepare('SELECT * FROM business_screens WHERE business_id = ? AND is_active = 1 ORDER BY created_at ASC LIMIT 1').get(biz.id) as any;
+      if (!screen) {
+        // Auto-provision default screen
+        const defaultScreenId = 'scr_' + crypto.randomBytes(6).toString('hex');
+        const defaultToken = 'disp_' + crypto.randomBytes(16).toString('hex');
+        try {
+          db.prepare(`
+            INSERT INTO business_screens (id, business_id, name, display_token, service_ids, room_name, is_active)
+            VALUES (?, ?, ?, ?, '[]', '1-xona', 1)
+          `).run(defaultScreenId, biz.id, 'Asosiy Zal Tablosi', defaultToken);
+          screen = db.prepare('SELECT * FROM business_screens WHERE id = ?').get(defaultScreenId) as any;
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (!screen || !screen.is_active || !biz) return null;
 
   let serviceIdsFilter: string[] = [];
   try {

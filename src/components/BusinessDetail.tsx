@@ -221,12 +221,14 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
         <div className="flex items-center gap-2 shrink-0">
           <button
             id="biz-tv-board-btn"
-            onClick={() => setShowQueueBoardModal(true)}
-            title="TV Tablo rejimi"
+            onClick={() => {
+              window.location.hash = `#display/${business.slug}`;
+            }}
+            title="Jonli TV Tablo"
             className="p-2 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-xl transition flex items-center gap-1.5 text-xs font-bold shadow-xs border border-amber-400/40 cursor-pointer"
           >
             <Tv className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">TV Tablo</span>
+            <span>TV Tablo</span>
           </button>
 
           <button
@@ -462,6 +464,19 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
                   style={{ width: `${Math.min(100, Math.max(15, queueCount * 20))}%` }}
                 />
               </div>
+
+              {/* Direct Live Tablo Action */}
+              <button
+                type="button"
+                id="biz-view-tablo-btn"
+                onClick={() => {
+                  window.location.hash = `#display/${business.slug}`;
+                }}
+                className="w-full mt-1 py-2 px-3 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-400/50 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shadow-xs active:scale-[0.99]"
+              >
+                <Tv className="w-4 h-4 text-amber-400" />
+                <span>📺 Jonli Navbat Tablosini Ko‘rish (Ekran)</span>
+              </button>
             </div>
 
             {/* DUAL PRIMARY ACTION TRIGGERS (Respects APPOINTMENT, LIVE_QUEUE, HYBRID modes) */}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Users, Clock, AlertCircle, CheckCircle, Send, Share2, Check, Bell } from 'lucide-react';
-import { api } from '../api';
+import { api, setStoredToken } from '../api';
 import { Service, User as UserType } from '../types';
 import { useTranslation } from '../i18n/LanguageContext';
 
@@ -71,14 +71,22 @@ export const QueueModal: React.FC<QueueModalProps> = ({
     }
 
     setSubmitting(true);
+    const digitsOnly = phone.replace(/\D/g, '');
+    const cleanPhone = digitsOnly.length >= 9 ? '+998' + digitsOnly.slice(-9) : phone.trim();
+
     try {
       const res = await api.joinQueue({
         business_id: business.id,
         service_id: selectedServiceId,
         customer_name: name,
-        customer_phone: phone,
+        customer_phone: cleanPhone,
         telegram_chat_id: telegramChatId.trim() || undefined,
       });
+
+      if (res.token) {
+        setStoredToken(res.token);
+        window.dispatchEvent(new Event('auth-change'));
+      }
 
       setJoinedTicket(res);
       onSuccess(res);

@@ -156,6 +156,19 @@ export default function App() {
         });
     }
 
+    // Listen for auth-change events across components (e.g., auto-auth on booking or login)
+    const handleAuthChange = () => {
+      api
+        .getMe()
+        .then((res) => {
+          if (res?.user) {
+            setCurrentUser(res.user);
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener('auth-change', handleAuthChange);
+
     // Load categories & cities
     Promise.all([api.getCategories(), api.getCities()])
       .then(([catList, cityList]) => {
@@ -163,6 +176,10 @@ export default function App() {
         setCities(cityList);
       })
       .catch((err) => console.error('Meta load error:', err));
+
+    return () => {
+      window.removeEventListener('auth-change', handleAuthChange);
+    };
   }, []);
 
   // Priority ordering for category chips: "Tibbiyot" placed at the very beginning next to "Barchasi" and "Avtoservis"

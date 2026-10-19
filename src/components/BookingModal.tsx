@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, Clock, User, Check, AlertCircle, Sparkles, CheckCircle2, Send, Share2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { api } from '../api';
+import { api, setStoredToken } from '../api';
 import { Service, StaffMember, User as UserType } from '../types';
 import { useTranslation } from '../i18n/LanguageContext';
 import {
@@ -181,6 +181,9 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     setSubmitting(true);
     setErrorMessage(null);
 
+    const digitsOnly = customerPhone.replace(/\D/g, '');
+    const cleanPhone = digitsOnly.length >= 9 ? '+998' + digitsOnly.slice(-9) : customerPhone.trim();
+
     try {
       const res = await api.createBooking({
         business_id: business.id,
@@ -189,8 +192,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         booking_date: selectedDate,
         start_time: selectedTime,
         customer_name: customerName,
-        customer_phone: customerPhone,
+        customer_phone: cleanPhone,
       });
+
+      // Auto-authentication on booking creation
+      if (res.token) {
+        setStoredToken(res.token);
+        window.dispatchEvent(new Event('auth-change'));
+      }
 
       // Confetti celebration
       try {

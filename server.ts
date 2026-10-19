@@ -293,6 +293,7 @@ try { db.exec(`ALTER TABLE users ADD COLUMN telegram_notifications_enabled INTEG
 try { db.exec(`ALTER TABLE users ADD COLUMN reminder_30m_enabled INTEGER DEFAULT 1;`); } catch(e){}
 try { db.exec(`ALTER TABLE users ADD COLUMN telegram_reminders_enabled INTEGER DEFAULT 1;`); } catch(e){}
 try { db.exec(`ALTER TABLE bookings ADD COLUMN reminder_sent INTEGER DEFAULT 0;`); } catch(e){}
+try { db.exec(`ALTER TABLE bookings ADD COLUMN reminder_5m_sent INTEGER DEFAULT 0;`); } catch(e){}
 try { db.exec(`ALTER TABLE queue_entries ADD COLUMN telegram_chat_id TEXT;`); } catch(e){}
 try { db.exec(`ALTER TABLE queue_entries ADD COLUMN near_alert_sent INTEGER DEFAULT 0;`); } catch(e){}
 try { db.exec(`ALTER TABLE queue_entries ADD COLUMN called_alert_sent INTEGER DEFAULT 0;`); } catch(e){}
@@ -1429,14 +1430,16 @@ async function checkAndSendBookingReminders() {
 
     const currentTotalMinutes = uzTime.getHours() * 60 + uzTime.getMinutes();
 
-    // Query active bookings for today where reminder has not been sent yet
+    // Query active bookings for today where either 30m or 5m reminder has not been sent yet
     const pendingReminders = db.prepare(`
       SELECT b.*,
              s.name as service_name, s.price_uzs,
              st.name as staff_name,
              biz.name as business_name, biz.address as business_address, biz.telegram_chat_id as biz_tg,
              u.telegram_chat_id as customer_tg, u.name as user_name, u.phone as user_phone,
-             COALESCE(u.reminder_30m_enabled, 1) as reminder_30m_enabled
+             COALESCE(u.reminder_30m_enabled, 1) as reminder_30m_enabled,
+             COALESCE(b.reminder_sent, 0) as reminder_30m_sent,
+             COALESCE(b.reminder_5m_sent, 0) as reminder_5m_sent
       FROM bookings b
       JOIN services s ON b.service_id = s.id
       JOIN staff st ON b.staff_id = st.id
@@ -1444,7 +1447,7 @@ async function checkAndSendBookingReminders() {
       JOIN users u ON b.customer_id = u.id
       WHERE b.status IN ('CONFIRMED', 'PENDING')
         AND b.booking_date = ?
-        AND (b.reminder_sent = 0 OR b.reminder_sent IS NULL)
+        AND (b.reminder_sent = 0 OR b.reminder_sent IS NULL OR b.reminder_5m_sent = 0 OR b.reminder_5m_sent IS NULL)
     `).all(todayStr) as any[];
 
     for (const b of pendingReminders) {
@@ -1453,8 +1456,8 @@ async function checkAndSendBookingReminders() {
       const bookingMinutes = h * 60 + m;
       const diffMinutes = bookingMinutes - currentTotalMinutes;
 
-      // Trigger 30 minutes before appointment (window: 1 to 35 minutes before start)
-      if (diffMinutes > 0 && diffMinutes <= 35) {
+      // 1. 30 MINUTES REMINDER (Window: 11 to 35 minutes before start)
+      if (diffMinutes > 10 && diffMinutes <= 35 && !b.reminder_30m_sent) {
         db.prepare('UPDATE bookings SET reminder_sent = 1 WHERE id = ?').run(b.id);
 
         const hoursLeft = Math.floor(diffMinutes / 60);
@@ -1463,7 +1466,7 @@ async function checkAndSendBookingReminders() {
           ? (minsLeft > 0 ? `${hoursLeft} soat ${minsLeft} daqiqa` : `${hoursLeft} soat`) 
           : `${minsLeft} daqiqa`;
 
-        // 1. In-App Notification
+        // In-App Notification
         const notifId = 'notif-' + crypto.randomUUID().slice(0, 8);
         try {
           db.prepare(`
@@ -1477,7 +1480,7 @@ async function checkAndSendBookingReminders() {
           );
         } catch (e) {}
 
-        // 2. Telegram Alert (respecting customer's 30-minute reminder toggle)
+        // Telegram Alert (respecting customer's 30-minute reminder toggle)
         if (b.reminder_30m_enabled === 1) {
           const targetChatId = b.customer_tg || resolveCustomerTelegramChatId({
             customer_id: b.customer_id,
@@ -1489,12 +1492,61 @@ async function checkAndSendBookingReminders() {
               chatId: targetChatId,
               recipientType: 'CUSTOMER',
               recipientId: b.customer_id,
-              message: `⏰ <b>Eslatma: Qabulingizga ${timeLeftStr} qoldi!</b>\n━━━━━━━━━━━━━━━━\n📋 Bron raqami: <b>#${b.booking_number}</b>\n🏢 Muassasa: <b>${b.business_name}</b>\n🩺 Xizmat: <b>${b.service_name}</b>\n👨‍⚕️ Mutaxassis: <b>${b.staff_name}</b>\n⏰ Vaqt: <b>Bugun, soat ${b.start_time}</b>\n📍 Manzil: <b>${b.business_address || 'Qarshi shahri'}</b>\n━━━━━━━━━━━━━━━━\n<i>Iltimos, o‘z vaqtida kelishingizni so‘raymiz! NavbatBor</i>`
+              message: `⏰ <b>Eslatma: Qabulingizga ${timeLeftStr} qoldi!</b>\n━━━━━━━━━━━━━━━━\n` +
+                `📋 Bron raqami: <b>#${b.booking_number}</b>\n` +
+                `🏢 Muassasa: <b>${b.business_name}</b>\n` +
+                `🩺 Xizmat: <b>${b.service_name}</b>\n` +
+                `👨‍⚕️ Mutaxassis: <b>${b.staff_name}</b>\n` +
+                `⏰ Qabul vaqti: <b>Bugun, soat ${b.start_time}</b>\n` +
+                `📍 Manzil: <b>${b.business_address || 'Qarshi shahri'}</b>\n` +
+                `━━━━━━━━━━━━━━━━\n` +
+                `<i>Iltimos, o‘z vaqtida kelishingizni so‘raymiz! NavbatBor</i>`
             });
             console.log(`[Reminder Service] Sent 30m Telegram reminder for #${b.booking_number} (${timeLeftStr} left) to chat ${targetChatId}`);
           }
-        } else {
-          console.log(`[Reminder Service] Telegram reminder for #${b.booking_number} skipped: customer disabled 30m reminders.`);
+        }
+      }
+
+      // 2. 5 MINUTES URGENT REMINDER (Window: 1 to 10 minutes before start)
+      if (diffMinutes > 0 && diffMinutes <= 10 && !b.reminder_5m_sent) {
+        db.prepare('UPDATE bookings SET reminder_5m_sent = 1 WHERE id = ?').run(b.id);
+
+        // In-App Notification
+        const notifId = 'notif-' + crypto.randomUUID().slice(0, 8);
+        try {
+          db.prepare(`
+            INSERT INTO notifications (id, user_id, title, message, type)
+            VALUES (?, ?, ?, ?, 'BOOKING_REMINDER_URGENT')
+          `).run(
+            notifId,
+            b.customer_id,
+            `🔔 DIQQAT: Qabulingizga ${diffMinutes} daqiqa qoldi!`,
+            `Hurmatli ${b.customer_name || b.user_name}, soat ${b.start_time} dagi "${b.business_name}" ("${b.service_name}") qabulingizga atigi ${diffMinutes} daqiqa qoldi. Mutaxassis: ${b.staff_name}. Iltimos, qabulxona oldida tayyor bo‘ling!`
+          );
+        } catch (e) {}
+
+        // Telegram Alert (5m urgent reminder)
+        const targetChatId = b.customer_tg || resolveCustomerTelegramChatId({
+          customer_id: b.customer_id,
+          customer_phone: b.customer_phone || b.user_phone,
+          customer_name: b.customer_name || b.user_name
+        });
+        if (targetChatId) {
+          sendTelegramAlert({
+            chatId: targetChatId,
+            recipientType: 'CUSTOMER',
+            recipientId: b.customer_id,
+            message: `🔔 <b>DIQQAT: Qabulingizga atigi ${diffMinutes} daqiqa qoldi!</b>\n━━━━━━━━━━━━━━━━\n` +
+              `📋 Bron raqami: <b>#${b.booking_number}</b>\n` +
+              `🏢 Muassasa: <b>${b.business_name}</b>\n` +
+              `🩺 Xizmat: <b>${b.service_name}</b>\n` +
+              `👨‍⚕️ Mutaxassis: <b>${b.staff_name}</b>\n` +
+              `⏰ Vaqt: <b>${b.start_time}</b>\n` +
+              `📍 Manzil: <b>${b.business_address || 'Qarshi shahri'}</b>\n` +
+              `━━━━━━━━━━━━━━━━\n` +
+              `👉 <b>Iltimos, zudlik bilan mutaxassis qabulxonasiga yaqinlashing!</b> NavbatBor`
+          });
+          console.log(`[Reminder Service] Sent 5m Telegram reminder for #${b.booking_number} (${diffMinutes}m left) to chat ${targetChatId}`);
         }
       }
     }
@@ -2911,33 +2963,86 @@ app.get('/api/businesses/:id/available-slots', (req, res) => {
   res.json({ slots: slotData.slots });
 });
 
-// CREATE BOOKING (CRITICAL: Strict Double-Booking Protection with atomic transaction locking)
-app.post('/api/bookings', requireAuth, async (req, res) => {
-  const user = (req as any).user;
-  const isPrivilegedStaff = ['SUPER_ADMIN', 'ADMIN', 'DISTRICT_ADMIN', 'OPERATING_PARTNER', 'BUSINESS_OWNER', 'MANAGER', 'STAFF', 'EMPLOYEE'].includes(user.role);
-  let targetCustomerId = user.id;
-  let finalCustName = req.body.customer_name || user.name;
-  let finalCustPhone = req.body.customer_phone || user.phone || '';
+// CREATE BOOKING (CRITICAL: Strict Double-Booking Protection with atomic transaction locking & Auto-Auth)
+app.post('/api/bookings', async (req, res) => {
+  let user = getAuthUser(req);
+  let sessionToken: string | null = null;
+  let targetCustomerId: string;
+  let finalCustName: string;
+  let finalCustPhone: string;
 
-  if (isPrivilegedStaff) {
-    if (req.body.customer_id && req.body.customer_id !== user.id) {
-      const regUser = db.prepare('SELECT id, name, phone FROM users WHERE id = ?').get(req.body.customer_id) as any;
-      if (regUser) {
-        targetCustomerId = regUser.id;
-        finalCustName = req.body.customer_name || regUser.name;
-        finalCustPhone = req.body.customer_phone || regUser.phone || '';
-      }
-    } else if (req.body.customer_phone && req.body.customer_phone !== user.phone) {
-      const cleanPhone = req.body.customer_phone.replace(/[^0-9]/g, '');
-      const matchedUser = db.prepare('SELECT id, name FROM users WHERE phone LIKE ? LIMIT 1').get(`%${cleanPhone.slice(-9)}%`) as any;
-      if (matchedUser) {
-        targetCustomerId = matchedUser.id;
+  if (user) {
+    const isPrivilegedStaff = ['SUPER_ADMIN', 'ADMIN', 'DISTRICT_ADMIN', 'OPERATING_PARTNER', 'BUSINESS_OWNER', 'MANAGER', 'STAFF', 'EMPLOYEE'].includes(user.role);
+    targetCustomerId = user.id;
+    finalCustName = (req.body.customer_name || user.name || 'Mijoz').trim();
+    finalCustPhone = (req.body.customer_phone || user.phone || '').trim();
+
+    if (isPrivilegedStaff) {
+      if (req.body.customer_id && req.body.customer_id !== user.id) {
+        const regUser = db.prepare('SELECT id, name, phone FROM users WHERE id = ?').get(req.body.customer_id) as any;
+        if (regUser) {
+          targetCustomerId = regUser.id;
+          finalCustName = req.body.customer_name || regUser.name;
+          finalCustPhone = req.body.customer_phone || regUser.phone || '';
+        }
+      } else if (req.body.customer_phone && req.body.customer_phone !== user.phone) {
+        const cleanPhone = req.body.customer_phone.replace(/[^0-9]/g, '');
+        if (cleanPhone.length >= 7) {
+          const matchedUser = db.prepare('SELECT id, name FROM users WHERE phone LIKE ? LIMIT 1').get(`%${cleanPhone.slice(-9)}%`) as any;
+          if (matchedUser) {
+            targetCustomerId = matchedUser.id;
+          }
+        }
       }
     }
+  } else {
+    // Unauthenticated guest customer: auto-register and create 30-day session
+    const rawName = (req.body.customer_name || 'Mijoz').trim();
+    const rawPhone = (req.body.customer_phone || '').trim();
+
+    if (!rawPhone) {
+      return res.status(400).json({ error: 'Iltimos, telefon raqamingizni kiriting' });
+    }
+
+    const digitsOnly = rawPhone.replace(/[^0-9]/g, '');
+    if (digitsOnly.length < 7) {
+      return res.status(400).json({ error: 'Telefon raqami noto‘g‘ri kiritildi' });
+    }
+
+    // Auto-fix phone number to standardized +998XXXXXXXXX format
+    const last9 = digitsOnly.slice(-9);
+    const standardPhone = '+998' + last9;
+
+    let matchedUser = db.prepare('SELECT * FROM users WHERE phone LIKE ? LIMIT 1').get(`%${last9}%`) as any;
+    if (matchedUser) {
+      user = matchedUser;
+      targetCustomerId = matchedUser.id;
+      finalCustName = rawName || matchedUser.name;
+      finalCustPhone = standardPhone;
+      if (rawName && rawName !== 'Mijoz' && matchedUser.name === 'Mijoz') {
+        try { db.prepare('UPDATE users SET name = ? WHERE id = ?').run(rawName, matchedUser.id); } catch(e) {}
+      }
+    } else {
+      const newUserId = 'usr-' + crypto.randomUUID().slice(0, 8);
+      const email = `guest_${last9}@navbatbor.uz`;
+      const passHash = hashPassword(crypto.randomBytes(8).toString('hex'));
+      db.prepare(`
+        INSERT INTO users (id, name, email, phone, password_hash, role, status)
+        VALUES (?, ?, ?, ?, ?, 'CUSTOMER', 'ACTIVE')
+      `).run(newUserId, rawName || 'Mijoz', email, standardPhone, passHash);
+
+      user = { id: newUserId, name: rawName || 'Mijoz', email, phone: standardPhone, role: 'CUSTOMER', status: 'ACTIVE' };
+      targetCustomerId = newUserId;
+      finalCustName = rawName || 'Mijoz';
+      finalCustPhone = standardPhone;
+    }
+
+    sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
+    db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, user.id);
   }
 
   const validSources = ['WEBSITE', 'TELEGRAM', 'MINI_APP', 'ADMIN', 'BUSINESS_DASHBOARD', 'QR', 'WALK_IN'];
-  const finalSource = validSources.includes(req.body.source) ? req.body.source : isPrivilegedStaff ? 'BUSINESS_DASHBOARD' : 'WEBSITE';
+  const finalSource = validSources.includes(req.body.source) ? req.body.source : (user && ['SUPER_ADMIN', 'ADMIN', 'BUSINESS_OWNER', 'STAFF'].includes(user.role)) ? 'BUSINESS_DASHBOARD' : 'WEBSITE';
 
   const result = await executeCreateBookingAtomic({
     business_id: req.body.business_id,
@@ -2958,7 +3063,18 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
     return res.status(result.statusCode || 400).json({ error: result.error });
   }
 
-  res.status(result.idempotent ? 200 : 201).json(result);
+  const responsePayload: any = { ...result };
+  if (sessionToken && user) {
+    responsePayload.token = sessionToken;
+    responsePayload.user = {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      role: user.role
+    };
+  }
+
+  res.status(result.idempotent ? 200 : 201).json(responsePayload);
 });
 
 // Manual reminder trigger for a booking
@@ -3027,12 +3143,46 @@ app.post('/api/bookings/:id/send-reminder', requireAuth, async (req, res) => {
 // 4. DIGITAL QUEUE (ELEKTRON NAVBAT)
 // ==========================================
 
-app.post('/api/queue/join', requireAuth, (req, res) => {
-  const user = (req as any).user;
+app.post('/api/queue/join', (req, res) => {
+  let user = getAuthUser(req);
+  let sessionToken: string | null = null;
   const { business_id, service_id, customer_name, customer_phone, telegram_chat_id } = req.body;
 
   if (!business_id || !service_id) {
     return res.status(400).json({ error: 'Biznes va xizmatni tanlang' });
+  }
+
+  if (!user) {
+    const rawName = (customer_name || 'Mijoz').trim();
+    const rawPhone = (customer_phone || '').trim();
+    if (!rawPhone) {
+      return res.status(400).json({ error: 'Iltimos, telefon raqamingizni kiriting' });
+    }
+    const digitsOnly = rawPhone.replace(/[^0-9]/g, '');
+    if (digitsOnly.length < 7) {
+      return res.status(400).json({ error: 'Telefon raqami noto‘g‘ri kiritildi' });
+    }
+    const last9 = digitsOnly.slice(-9);
+    const standardPhone = '+998' + last9;
+
+    let matchedUser = db.prepare('SELECT * FROM users WHERE phone LIKE ? LIMIT 1').get(`%${last9}%`) as any;
+    if (matchedUser) {
+      user = matchedUser;
+      if (rawName && rawName !== 'Mijoz' && matchedUser.name === 'Mijoz') {
+        try { db.prepare('UPDATE users SET name = ? WHERE id = ?').run(rawName, matchedUser.id); } catch(e) {}
+      }
+    } else {
+      const newUserId = 'usr-' + crypto.randomUUID().slice(0, 8);
+      const email = `queue_${last9}@navbatbor.uz`;
+      const passHash = hashPassword(crypto.randomBytes(8).toString('hex'));
+      db.prepare(`
+        INSERT INTO users (id, name, email, phone, password_hash, role, status)
+        VALUES (?, ?, ?, ?, ?, 'CUSTOMER', 'ACTIVE')
+      `).run(newUserId, rawName || 'Mijoz', email, standardPhone, passHash);
+      user = { id: newUserId, name: rawName || 'Mijoz', email, phone: standardPhone, role: 'CUSTOMER', status: 'ACTIVE' };
+    }
+    sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
+    db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, user.id);
   }
 
   // Check if business is open (Asia/Tashkent timezone)
@@ -3204,7 +3354,9 @@ app.post('/api/queue/join', requireAuth, (req, res) => {
     estimatedWaitMinutes: waitCalc.estimatedWaitMinutes,
     isApproximate: true,
     activeStaffCount: waitCalc.activeStaffCount,
-    telegramLink: `https://t.me/${botUser}?start=queue_${queueId}`
+    telegramLink: `https://t.me/${botUser}?start=queue_${queueId}`,
+    token: sessionToken || undefined,
+    user: sessionToken ? { id: user.id, name: user.name, phone: user.phone, role: user.role } : undefined
   });
 });
 
@@ -8458,19 +8610,30 @@ async function processTelegramUpdate(update: any): Promise<void> {
     }
 
     // C. Business Menu Direct Buttons
-    if (cbData === 'biz_next_customer') {
-      const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
+    if (cbData === 'biz_next_customer' || (cbData && cbData.startsWith('biz_call_next_'))) {
+      const targetBizId = cbData.startsWith('biz_call_next_') ? cbData.replace('biz_call_next_', '') : null;
+      let bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
+      if (!bizInfo && targetBizId) {
+        const bizRow = db.prepare('SELECT * FROM businesses WHERE id = ?').get(targetBizId) as any;
+        if (bizRow) {
+          bizInfo = { business: bizRow, permissions: ['CALL_NEXT_CUSTOMER'] };
+        }
+      }
       if (bizInfo) {
         await handleTelegramDirectCallNext(cbChatId, cbUserId, bizInfo);
       } else {
-        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Biznes aniqlanmadi.' });
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Biznes aniqlanmadi yoki ruxsat berilmagan.' });
       }
       return;
     }
 
-    if (cbData === 'biz_current_queue') {
-      const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
-      if (bizInfo) {
+    if (cbData === 'biz_current_queue' || (cbData && cbData.startsWith('biz_open_queue_'))) {
+      const targetBizId = cbData.startsWith('biz_open_queue_') ? cbData.replace('biz_open_queue_', '') : null;
+      let bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
+      const bizIdToUse = targetBizId || bizInfo?.business?.id;
+      const bizToUse = bizInfo?.business || (bizIdToUse ? db.prepare('SELECT * FROM businesses WHERE id = ?').get(bizIdToUse) as any : null);
+
+      if (bizToUse) {
         const waiting = db.prepare(`
           SELECT q.*, s.name as service_name
           FROM queue_entries q
@@ -8478,9 +8641,9 @@ async function processTelegramUpdate(update: any): Promise<void> {
           WHERE q.business_id = ? AND q.status = 'WAITING'
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
           ORDER BY q.joined_at ASC LIMIT 10
-        `).all(bizInfo.business.id) as any[];
+        `).all(bizToUse.id) as any[];
 
-        let textList = `📋 <b>${bizInfo.business.name} — Navbat Ro‘yxati:</b>\n━━━━━━━━━━━━━━━━\n`;
+        let textList = `📋 <b>${bizToUse.name} — Navbat Ro‘yxati:</b>\n━━━━━━━━━━━━━━━━\n`;
         if (waiting.length === 0) {
           textList += `<i>Hozirda kutayotgan mijozlar yo‘q.</i>`;
         } else {
@@ -8493,10 +8656,12 @@ async function processTelegramUpdate(update: any): Promise<void> {
           message: textList,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: 'biz_next_customer' }]
+              [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${bizToUse.id}` }]
             ]
           }
         });
+      } else {
+        await sendTelegramAlert({ chatId: cbChatId, message: '⛔️ Biznes aniqlanmadi.' });
       }
       return;
     }

@@ -2426,8 +2426,8 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   const cbUserId = String(cb.from?.id || cbChatId);
   const data = cb.data || '';
 
-  // Fast acknowledge callback query
-  await answerBusinessBotCallback(cb.id);
+  // Fast non-blocking acknowledge callback query (instantly stops button loading spinner)
+  answerBusinessBotCallback(cb.id).catch(() => {});
 
   const auth = getBusinessBotUserAuth(db, cbUserId, cbChatId);
   const lang = auth.language;

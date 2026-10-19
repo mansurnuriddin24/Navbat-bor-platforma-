@@ -789,7 +789,7 @@ export function validateSlotForBooking(params: {
   let query = `
     SELECT id, booking_number, start_time, end_time FROM bookings
     WHERE staff_id = ? AND booking_date = ?
-      AND status IN ('PENDING', 'CONFIRMED', 'IN_PROGRESS')
+      AND status IN ('PENDING', 'CONFIRMED', 'IN_PROGRESS', 'IN_SERVICE')
       AND (start_time < ? AND end_time > ?)
   `;
   const queryParams: any[] = [staff_id, booking_date, endTime, start_time];
@@ -4566,7 +4566,7 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
       FROM bookings 
       WHERE staff_id = ? 
         AND booking_date = ? 
-        AND status IN ('PENDING', 'CONFIRMED', 'IN_PROGRESS')
+        AND status IN ('PENDING', 'CONFIRMED', 'IN_PROGRESS', 'IN_SERVICE')
         AND (start_time < ? AND end_time > ?)
     `).get(staff_id, booking_date, endTime, start_time) as any;
 

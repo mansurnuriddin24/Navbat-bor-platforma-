@@ -239,10 +239,25 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startDate}T${startTime}/${startDate}T${endTime}&details=${details}&location=${location}`;
   };
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const getLocalTodayStr = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const todayStr = getLocalTodayStr();
   const isPastBooking = (b: Booking) => {
-    if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(b.status)) return true;
-    if (b.booking_date < todayStr) return true;
+    if (['COMPLETED', 'CANCELLED', 'NO_SHOW', 'EXPIRED'].includes(b.status)) return true;
+    const localToday = getLocalTodayStr();
+    if (b.booking_date < localToday) return true;
+    if (b.booking_date === localToday) {
+      const now = new Date();
+      const currentHM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const targetTime = b.end_time || b.start_time;
+      if (targetTime && targetTime < currentHM) return true;
+    }
     return false;
   };
 
@@ -259,11 +274,15 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const filteredPastBookings = pastBookings.filter((b) => {
     if (historyFilterStatus === 'ALL') return true;
     if (historyFilterStatus === 'COMPLETED') return b.status === 'COMPLETED';
-    if (historyFilterStatus === 'CANCELLED') return ['CANCELLED', 'NO_SHOW'].includes(b.status);
+    if (historyFilterStatus === 'CANCELLED') return ['CANCELLED', 'NO_SHOW', 'EXPIRED'].includes(b.status);
     return true;
   });
 
   const handleOpenRebook = (b: Booking) => {
+    if (!b.staff_id && b.business_slug) {
+      window.location.hash = `#/biz/${b.business_slug}`;
+      return;
+    }
     setSelectedHistoryBooking(b);
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -751,7 +770,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
             {[
               { id: 'ALL', label: t('cat_all'), count: pastBookings.length },
               { id: 'COMPLETED', label: t('status_completed'), count: pastBookings.filter(b => b.status === 'COMPLETED').length },
-              { id: 'CANCELLED', label: t('status_cancelled'), count: pastBookings.filter(b => ['CANCELLED', 'NO_SHOW'].includes(b.status)).length },
+              { id: 'CANCELLED', label: t('status_cancelled'), count: pastBookings.filter(b => ['CANCELLED', 'NO_SHOW', 'EXPIRED'].includes(b.status)).length },
             ].map((f) => {
               const isSelected = historyFilterStatus === f.id;
               return (
@@ -785,14 +804,31 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 {t('no_history_bookings_title')}
               </h3>
               <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-sm mx-auto leading-relaxed">
-                {t('no_history_bookings_desc')}
+                {upcomingBookings.length > 0
+                  ? `Sizda ${upcomingBookings.length} ta faol bron mavjud. Xizmat ko‘rsatilgach yoki vaqti o‘tgach, ushbu ro‘yxatda avtomatik saqlanadi.`
+                  : t('no_history_bookings_desc')}
               </p>
-              <button
-                onClick={onExploreBusinesses}
-                className="mt-5 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer min-h-[40px]"
-              >
-                {t('search_button')}
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3 mt-5">
+                {upcomingBookings.length > 0 && (
+                  <button
+                    onClick={() => setActiveTab('bookings')}
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer min-h-[40px] flex items-center gap-2"
+                  >
+                    <Calendar className="w-4 h-4" />
+                    <span>Faol bronlarni ko‘rish ({upcomingBookings.length})</span>
+                  </button>
+                )}
+                <button
+                  onClick={onExploreBusinesses}
+                  className={`px-5 py-2.5 text-xs font-bold rounded-xl shadow-xs cursor-pointer min-h-[40px] ${
+                    upcomingBookings.length > 0
+                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+                >
+                  {t('search_button')}
+                </button>
+              </div>
             </div>
           ) : filteredPastBookings.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-xs">
@@ -810,17 +846,36 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <div key={b.id} className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs flex flex-col justify-between hover:border-slate-300 transition">
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-3">
-                      <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
-                        #{b.booking_number}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
+                          #{b.booking_number}
+                        </span>
+                        {(b as any).entry_type === 'QUEUE' ? (
+                          <span className="text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md">
+                            Jonli navbat
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-black uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md">
+                            Oldindan bron
+                          </span>
+                        )}
+                      </div>
                       <span className={`text-[11px] font-bold px-2.5 py-1 rounded-lg ${
                         b.status === 'COMPLETED'
                           ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : b.status === 'CANCELLED'
+                          : ['CANCELLED', 'NO_SHOW', 'EXPIRED'].includes(b.status)
                           ? 'bg-rose-50 text-rose-700 border border-rose-200'
                           : 'bg-slate-100 text-slate-600'
                       }`}>
-                        {b.status === 'COMPLETED' ? t('status_completed') : b.status === 'CANCELLED' ? t('status_cancelled') : b.status}
+                        {b.status === 'COMPLETED'
+                          ? t('status_completed')
+                          : b.status === 'CANCELLED'
+                          ? t('status_cancelled')
+                          : b.status === 'EXPIRED'
+                          ? 'Muddati o‘tgan'
+                          : b.status === 'NO_SHOW'
+                          ? 'Kelmagan'
+                          : b.status}
                       </span>
                     </div>
 
@@ -857,10 +912,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         <UserIcon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span>Mutaxassis: <strong className="text-slate-700">{b.staff_name}</strong></span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="line-clamp-1">{b.business_address}</span>
-                      </div>
+                      {b.business_address && (
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="line-clamp-1">{b.business_address}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

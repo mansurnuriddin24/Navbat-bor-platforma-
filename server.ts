@@ -6281,30 +6281,122 @@ app.get('/api/customer/bookings', requireAuth, (req, res) => {
   const user = (req as any).user;
   const { status } = req.query;
 
+  // 1. Fetch user's current phone from DB in case it was updated
+  const freshUser = (db.prepare('SELECT id, phone, telegram_chat_id FROM users WHERE id = ?').get(user.id) as any) || user;
+  const cleanPhone = (freshUser.phone || '').replace(/[^0-9]/g, '');
+  const last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
+
+  // 2. Auto-link bookings & queue_entries to this customer_id if phone matches
+  if (last9) {
+    try {
+      db.prepare(`
+        UPDATE bookings 
+        SET customer_id = ? 
+        WHERE (customer_id != ? OR customer_id IS NULL) 
+          AND customer_phone IS NOT NULL 
+          AND customer_phone LIKE ?
+      `).run(freshUser.id, freshUser.id, `%${last9}%`);
+
+      db.prepare(`
+        UPDATE queue_entries 
+        SET customer_id = ? 
+        WHERE (customer_id != ? OR customer_id IS NULL) 
+          AND customer_phone IS NOT NULL 
+          AND customer_phone LIKE ?
+      `).run(freshUser.id, freshUser.id, `%${last9}%`);
+    } catch (e) {}
+  }
+
+  // 3. Query bookings matching customer_id OR customer_phone
   let query = `
     SELECT 
       b.*,
       biz.name as business_name, biz.slug as business_slug, biz.address as business_address, biz.phone as business_phone,
       s.name as service_name, s.duration_minutes,
       st.name as staff_name,
-      r.id as review_id, r.rating as review_rating
+      r.id as review_id, r.rating as review_rating,
+      'BOOKING' as entry_type
     FROM bookings b
     JOIN businesses biz ON b.business_id = biz.id
     JOIN services s ON b.service_id = s.id
     JOIN staff st ON b.staff_id = st.id
     LEFT JOIN reviews r ON b.id = r.booking_id
-    WHERE b.customer_id = ?
+    WHERE (
+      b.customer_id = ?
+      ${last9 ? `OR (b.customer_phone IS NOT NULL AND b.customer_phone LIKE ?)` : ''}
+    )
   `;
 
-  const params: any[] = [user.id];
+  const params: any[] = [freshUser.id];
+  if (last9) {
+    params.push(`%${last9}%`);
+  }
   if (status) {
     query += ' AND b.status = ?';
     params.push(status);
   }
   query += ' ORDER BY b.booking_date DESC, b.start_time DESC';
 
-  const rows = db.prepare(query).all(...params);
-  res.json(rows);
+  const bookingRows = (db.prepare(query).all(...params) as any[]) || [];
+
+  // 4. Also include completed and cancelled queue entries in customer's visit history
+  let queueRows: any[] = [];
+  try {
+    const qParams: any[] = [freshUser.id];
+    let qFilter = 'q.customer_id = ?';
+    if (last9) {
+      qFilter += ' OR (q.customer_phone IS NOT NULL AND q.customer_phone LIKE ?)';
+      qParams.push(`%${last9}%`);
+    }
+    if (freshUser.telegram_chat_id) {
+      qFilter += ' OR (q.telegram_chat_id IS NOT NULL AND q.telegram_chat_id = ?)';
+      qParams.push(freshUser.telegram_chat_id);
+    }
+
+    queueRows = (db.prepare(`
+      SELECT 
+        q.id,
+        q.queue_number as booking_number,
+        q.business_id,
+        q.service_id,
+        COALESCE(q.staff_id, '') as staff_id,
+        q.customer_id,
+        q.customer_name,
+        q.customer_phone,
+        substr(q.joined_at, 1, 10) as booking_date,
+        substr(q.joined_at, 12, 5) as start_time,
+        substr(COALESCE(q.completed_at, q.joined_at), 12, 5) as end_time,
+        s.price_uzs as total_price_uzs,
+        q.status,
+        NULL as cancel_reason,
+        COALESCE(q.source, 'WALK_IN') as source,
+        q.joined_at as created_at,
+        biz.name as business_name, biz.slug as business_slug, biz.address as business_address, biz.phone as business_phone,
+        s.name as service_name, s.duration_minutes,
+        COALESCE(st.name, 'Navbatchi mutaxassis') as staff_name,
+        NULL as review_id, NULL as review_rating,
+        'QUEUE' as entry_type
+      FROM queue_entries q
+      JOIN businesses biz ON q.business_id = biz.id
+      JOIN services s ON q.service_id = s.id
+      LEFT JOIN staff st ON q.staff_id = st.id
+      WHERE q.status IN ('COMPLETED', 'CANCELLED', 'NO_SHOW')
+        AND (${qFilter})
+      ORDER BY q.joined_at DESC
+      LIMIT 50
+    `).all(...qParams) as any[]) || [];
+  } catch (e) {
+    console.error('Queue history fetch error:', e);
+  }
+
+  // Combine and sort by date descending
+  const combined = [...bookingRows, ...queueRows].sort((a, b) => {
+    const dateA = `${a.booking_date} ${a.start_time || '00:00'}`;
+    const dateB = `${b.booking_date} ${b.start_time || '00:00'}`;
+    return dateB.localeCompare(dateA);
+  });
+
+  res.json(combined);
 });
 
 app.post(['/api/customer/bookings/:id/cancel', '/api/user/bookings/:id/cancel'], requireAuth, async (req, res) => {
@@ -7944,16 +8036,40 @@ function authenticateTelegramUser(tgId: string | null, info: { first_name?: stri
     user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
   }
 
-  // Link any active queue entries for this user
+  // Link any queue entries for this user
   if (tgIdStr && user?.id) {
     try {
       db.prepare(`
         UPDATE queue_entries 
-        SET telegram_chat_id = ? 
-        WHERE (customer_id = ? OR (customer_phone IS NOT NULL AND customer_phone = ?)) 
-          AND status IN ('WAITING', 'CALLED')
-      `).run(tgIdStr, user.id, user.phone || '');
+        SET telegram_chat_id = ?, customer_id = ? 
+        WHERE (customer_id = ? OR (customer_phone IS NOT NULL AND customer_phone = ?) OR telegram_chat_id = ?)
+      `).run(tgIdStr, user.id, user.id, user.phone || '', tgIdStr);
     } catch (e) {}
+  }
+
+  // Link historical bookings and queue entries by phone if present
+  if (user?.id && user.phone) {
+    const cleanPhone = user.phone.replace(/[^0-9]/g, '');
+    const last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
+    if (last9) {
+      try {
+        db.prepare(`
+          UPDATE bookings 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+
+        db.prepare(`
+          UPDATE queue_entries 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+      } catch (e) {}
+    }
   }
 
   // Create high-entropy secure user session token
@@ -13911,6 +14027,30 @@ app.put('/api/customer/profile', requireAuth, (req, res) => {
     remValue,
     user.id
   );
+
+  if (phone) {
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    const last9 = cleanPhone.length >= 7 ? cleanPhone.slice(-9) : '';
+    if (last9) {
+      try {
+        db.prepare(`
+          UPDATE bookings 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+
+        db.prepare(`
+          UPDATE queue_entries 
+          SET customer_id = ? 
+          WHERE (customer_id != ? OR customer_id IS NULL) 
+            AND customer_phone IS NOT NULL 
+            AND customer_phone LIKE ?
+        `).run(user.id, user.id, `%${last9}%`);
+      } catch (e) {}
+    }
+  }
 
   const updated = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, COALESCE(reminder_30m_enabled, 1) as reminder_30m_enabled, COALESCE(telegram_notifications_enabled, 1) as telegram_notifications_enabled FROM users WHERE id = ?').get(user.id);
   res.json({ success: true, user: updated });

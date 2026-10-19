@@ -1606,7 +1606,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       .run(user.id, token, sessionId);
 
     const appUrl = getBusinessPlatformAppUrl(db);
-    const returnUrl = `${appUrl}/?auth_session=${sessionId}#dashboard`;
+    const returnUrl = `${appUrl}/?auth_session=${sessionId}&token=${token}#dashboard`;
     await sendBusinessBotMessage(
       chatId,
       `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSiz NavbatBor Biznes platformasiga Telegram (@${getBusinessBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
@@ -1675,7 +1675,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         .run(user.id, token, session.id);
 
       const appUrl = getBusinessPlatformAppUrl(db);
-      const returnUrl = `${appUrl}/?auth_session=${session.id}#dashboard`;
+      const returnUrl = `${appUrl}/?auth_session=${session.id}&token=${token}#dashboard`;
       await sendBusinessBotMessage(
         chatId,
         `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib biznesingizni boshqarishingiz mumkin.`,

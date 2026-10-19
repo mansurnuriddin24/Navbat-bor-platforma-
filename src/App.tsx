@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, SlidersHorizontal, MapPin, Star, Calendar, 
   Sparkles, Shield, ShieldCheck, ArrowRight, CheckCircle, Clock, Building2, QrCode,
-  Navigation, AlertCircle, RefreshCw
+  Navigation, AlertCircle, RefreshCw, User as UserIcon
 } from 'lucide-react';
 import { useGeolocation } from './hooks/useGeolocation';
 import { api, setStoredToken } from './api';
@@ -41,6 +41,7 @@ export default function App() {
 
   // Navigation & User State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [activeView, setActiveView] = useState<
     'home' | 'search' | 'business-detail' | 'customer-dashboard' | 'business-dashboard' | 'admin-panel' | 'operating-partner' | 'for-customers' | 'for-business' | 'live-display'
   >('home');
@@ -125,12 +126,16 @@ export default function App() {
       }
       if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') {
         setActiveView('business-dashboard');
+        window.location.hash = '#dashboard';
       } else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') {
         setActiveView('operating-partner');
+        window.location.hash = '#partner';
       } else if (['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) {
         setActiveView('admin-panel');
+        window.location.hash = '#admin';
       } else {
         setActiveView('customer-dashboard');
+        window.location.hash = '#customer';
       }
     };
 
@@ -141,13 +146,17 @@ export default function App() {
 
     if (directToken) {
       setStoredToken(directToken);
-      cleanCurrentUrl();
       api.getMe().then((res) => {
         if (res?.user) {
           setCurrentUser(res.user);
           navigateUserToPanel(res.user);
         }
-      }).catch(() => {});
+      }).catch((e) => {
+        console.warn('Direct token auth error:', e);
+      }).finally(() => {
+        setIsAuthLoading(false);
+        cleanCurrentUrl();
+      });
     } else if (authSessionId) {
       // Automatic login upon returning from Telegram bot via "Saytga o‘tish" link
       api
@@ -160,16 +169,32 @@ export default function App() {
             try {
               await api.consumeTelegramAuthSession(authSessionId);
             } catch (e) {}
+          } else {
+            // Check existing session as fallback
+            api.getMe().then((meRes) => {
+              if (meRes?.user) {
+                setCurrentUser(meRes.user);
+                navigateUserToPanel(meRes.user);
+              }
+            }).catch(() => {});
           }
         })
         .catch((e) => {
           console.warn('Telegram auth return error:', e);
+          api.getMe().then((meRes) => {
+            if (meRes?.user) {
+              setCurrentUser(meRes.user);
+              navigateUserToPanel(meRes.user);
+            }
+          }).catch(() => {});
         })
         .finally(() => {
+          setIsAuthLoading(false);
           cleanCurrentUrl();
         });
     } else if (authError) {
       alert(`Kirishda xatolik: ${authError}`);
+      setIsAuthLoading(false);
       cleanCurrentUrl();
     } else {
       // Check existing session in localStorage
@@ -182,6 +207,9 @@ export default function App() {
         })
         .catch(() => {
           // Guest user is fine
+        })
+        .finally(() => {
+          setIsAuthLoading(false);
         });
     }
 
@@ -843,22 +871,64 @@ export default function App() {
         )}
 
         {/* VIEW: CUSTOMER DASHBOARD */}
-        {activeView === 'customer-dashboard' && currentUser && (
-          <CustomerDashboard
-            currentUser={currentUser}
-            initialTab={customerInitialTab}
-            onExploreBusinesses={() => {
-              setActiveView('search');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onSelectBusiness={handleSelectBusiness}
-            onUserUpdate={(updated) => setCurrentUser(updated)}
-          />
+        {activeView === 'customer-dashboard' && (
+          isAuthLoading ? (
+            <div className="max-w-md mx-auto my-32 text-center">
+              <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+              <p className="text-sm font-semibold text-slate-600">Mijoz kabineti yuklanmoqda...</p>
+            </div>
+          ) : currentUser ? (
+            <CustomerDashboard
+              currentUser={currentUser}
+              initialTab={customerInitialTab}
+              onExploreBusinesses={() => {
+                setActiveView('search');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onSelectBusiness={handleSelectBusiness}
+              onUserUpdate={(updated) => setCurrentUser(updated)}
+            />
+          ) : (
+            <div className="max-w-md mx-auto my-20 p-8 bg-white border border-slate-200 rounded-2xl text-center shadow-xs">
+              <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-blue-100">
+                <UserIcon className="w-7 h-7" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Mijoz kabineti</h3>
+              <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                Navbatlaringiz, bronlaringiz va sevimli muassasalaringizni boshqarish uchun shaxsiy hisobingizga kiring.
+              </p>
+              <div className="flex gap-2.5 justify-center mt-6">
+                <button
+                  onClick={() => {
+                    setAuthInitialMode('login');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition cursor-pointer shadow-sm shadow-blue-500/20 active:scale-95"
+                >
+                  Kirish / Ro‘yxatdan o‘tish
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveView('home');
+                    window.location.hash = '';
+                  }}
+                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer active:scale-95"
+                >
+                  Bosh sahifa
+                </button>
+              </div>
+            </div>
+          )
         )}
 
         {/* VIEW: BUSINESS DASHBOARD */}
         {activeView === 'business-dashboard' && (
-          currentUser && (currentUser.role === 'BUSINESS_OWNER' || currentUser.role === 'STAFF') ? (
+          isAuthLoading ? (
+            <div className="max-w-md mx-auto my-32 text-center">
+              <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+              <p className="text-sm font-semibold text-slate-600">Biznes kabineti yuklanmoqda...</p>
+            </div>
+          ) : currentUser && (currentUser.role === 'BUSINESS_OWNER' || currentUser.role === 'STAFF') ? (
             <BusinessDashboard
               currentUser={currentUser}
               onOpenOnboarding={() => setOnboardModalOpen(true)}
@@ -870,19 +940,39 @@ export default function App() {
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                 Ushbu boshqaruv paneliga faqat platforma ma’muriyati tomonidan tasdiqlangan biznes egalari va xodimlar kirishi mumkin.
               </p>
-              <button
-                onClick={() => setActiveView('home')}
-                className="mt-5 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition cursor-pointer"
-              >
-                Bosh sahifaga qaytish
-              </button>
+              <div className="flex gap-2 justify-center mt-5">
+                <button
+                  onClick={() => {
+                    setAuthModalBotType('business');
+                    setAuthInitialMode('login');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition cursor-pointer"
+                >
+                  Biznes sifatida kirish
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveView('home');
+                    window.location.hash = '';
+                  }}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
+                >
+                  Bosh sahifaga qaytish
+                </button>
+              </div>
             </div>
           )
         )}
 
         {/* VIEW: ADMIN PANEL */}
         {activeView === 'admin-panel' && (
-          currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER') ? (
+          isAuthLoading ? (
+            <div className="max-w-md mx-auto my-32 text-center">
+              <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+              <p className="text-sm font-semibold text-slate-600">Admin panel yuklanmoqda...</p>
+            </div>
+          ) : currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER' || currentUser.role === 'SUPER_ADMIN') ? (
             <AdminPanel onSwitchToPartner={() => setActiveView('operating-partner')} />
           ) : (
             <div className="max-w-md mx-auto my-20 p-8 bg-white border border-slate-200 rounded-2xl text-center shadow-xs">
@@ -902,7 +992,10 @@ export default function App() {
                   Admin sifatida kirish
                 </button>
                 <button
-                  onClick={() => setActiveView('home')}
+                  onClick={() => {
+                    setActiveView('home');
+                    window.location.hash = '';
+                  }}
                   className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
                 >
                   Bosh sahifa
@@ -914,7 +1007,12 @@ export default function App() {
 
         {/* VIEW: OPERATING PARTNER DASHBOARD */}
         {activeView === 'operating-partner' && (
-          currentUser && (currentUser.role === 'OPERATING_PARTNER' || currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER' || currentUser.role === 'SALES_MANAGER' || currentUser.role === 'BUSINESS_MANAGER') ? (
+          isAuthLoading ? (
+            <div className="max-w-md mx-auto my-32 text-center">
+              <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+              <p className="text-sm font-semibold text-slate-600">Hamkor paneli yuklanmoqda...</p>
+            </div>
+          ) : currentUser && (currentUser.role === 'OPERATING_PARTNER' || currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER' || currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'SALES_MANAGER' || currentUser.role === 'BUSINESS_MANAGER') ? (
             <OperatingPartnerDashboard
               currentUser={currentUser}
               onSelectBusiness={handleSelectBusiness}
@@ -928,7 +1026,10 @@ export default function App() {
                 Operating Partner boshqaruv paneliga faqat tayinlangan hududiy operatsion boshqaruvchilar va Founder kirishi mumkin.
               </p>
               <button
-                onClick={() => setActiveView('home')}
+                onClick={() => {
+                  setActiveView('home');
+                  window.location.hash = '';
+                }}
                 className="mt-5 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition cursor-pointer"
               >
                 Bosh sahifaga qaytish

@@ -2259,17 +2259,17 @@ function seedDatabase() {
     // Delete all test/dummy businesses, reviews, bookings, staff, services
     db.exec(`
       PRAGMA foreign_keys = OFF;
-      DELETE FROM reviews WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM bookings WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM queue_entries WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM staff_services WHERE staff_id IN (SELECT id FROM staff WHERE business_id != 'biz-nasaf-dental');
-      DELETE FROM staff WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM services WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM business_hours WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM business_memberships WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM ad_promotions WHERE business_id != 'biz-nasaf-dental';
-      DELETE FROM businesses WHERE id != 'biz-nasaf-dental';
-      DELETE FROM business_applications WHERE id != 'app-nasaf-dental' AND business_name != 'Nasaf dental';
+      DELETE FROM reviews WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM bookings WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM queue_entries WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM staff_services WHERE staff_id IN (SELECT id FROM staff WHERE business_id LIKE 'biz-test-%');
+      DELETE FROM staff WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM services WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM business_hours WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM business_memberships WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM ad_promotions WHERE business_id LIKE 'biz-test-%';
+      DELETE FROM businesses WHERE id LIKE 'biz-test-%';
+      DELETE FROM business_applications WHERE id LIKE 'app-test-%';
       PRAGMA foreign_keys = ON;
     `);
 

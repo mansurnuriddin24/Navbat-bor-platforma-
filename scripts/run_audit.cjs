@@ -31,9 +31,10 @@ try {
   assert(foreignKeys.foreign_keys === 1, 'Foreign keys yoqilganligi', `Hozirgi holat: ${foreignKeys.foreign_keys}`);
 
   const businesses = db.prepare('SELECT id, name, status, is_verified, is_sponsored, city_id FROM businesses').all();
-  assert(businesses.length === 1 && businesses[0].name === 'Nasaf dental', 'Faqat haqiqiy "Nasaf dental" mavjudligi', `Topilgan: ${businesses.length}`);
-  assert(businesses[0].status === 'APPROVED' && businesses[0].is_verified === 1, '"Nasaf dental" holati APPROVED va VERIFIED ekanligi');
-  assert(businesses[0].city_id === 'city-qarshi', '"Nasaf dental" Qarshi shahriga biriktirilganligi');
+  const nasafBiz = businesses.find(b => b.id === 'biz-nasaf-dental' || b.name === 'Nasaf dental');
+  assert(Boolean(nasafBiz), 'Haqiqiy "Nasaf dental" mavjudligi', `Topilgan bizneslar: ${businesses.length}`);
+  assert(nasafBiz && nasafBiz.status === 'APPROVED' && nasafBiz.is_verified === 1, '"Nasaf dental" holati APPROVED va VERIFIED ekanligi');
+  assert(nasafBiz && nasafBiz.city_id === 'city-qarshi', '"Nasaf dental" Qarshi shahriga biriktirilganligi');
 
   const cities = db.prepare('SELECT id, name FROM cities').all();
   assert(cities.length === 1 && cities[0].id === 'city-qarshi', 'Faqat Qarshi shahri ro‘yxatda ekanligi (boshqa shaharlar yo‘qligi)');

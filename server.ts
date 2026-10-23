@@ -2363,6 +2363,37 @@ function seedDatabase() {
 
     db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-nasaf-1', 'srv-nasaf-1')`).run();
 
+    // Ensure Queen_Salon exists (if not already present) so it is preserved across restarts
+    const queenBizId = 'biz-queen-salon';
+    db.prepare(`
+      INSERT OR IGNORE INTO businesses (
+        id, owner_id, name, slug, category_id, city_id, district, address, phone, description,
+        status, is_verified, is_sponsored, subscription_plan_code, subscription_expires_at,
+        subscription_status, is_trial, trial_used, trial_started_at, latitude, longitude,
+        telegram_chat_id, telegram_user_id
+      ) VALUES (
+        ?, ?, 'Queen_Salon', 'queen-salon', 'cat-beauty', 'city-qarshi', 'Markaz',
+        'Qarshi shahri, Mustaqillik ko‘chasi', '+998908862540',
+        'Zamonaviy go‘zallik saloni, kosmetologiya, vizaj va soch parvarishi xizmatlari.',
+        'APPROVED', 1, 0, 'FREE', ?,
+        'TRIAL', 1, 1, CURRENT_TIMESTAMP, 38.8605, 65.7910,
+        '5564730141', '5564730141'
+      )
+    `).run(queenBizId, ownerId, trialExpiry);
+    db.prepare(`
+      INSERT OR IGNORE INTO business_memberships (id, business_id, user_id, role, permissions)
+      VALUES ('bm-queen-salon', ?, ?, 'OWNER', '["ALL"]')
+    `).run(queenBizId, ownerId);
+    db.prepare(`
+      INSERT OR IGNORE INTO services (id, business_id, name, duration_minutes, price_uzs, description, is_active)
+      VALUES ('srv-queen-1', ?, 'Standart go‘zallik xizmati', 45, 100000, 'Professional go‘zallik va parvarish xizmati', 1)
+    `).run(queenBizId);
+    db.prepare(`
+      INSERT OR IGNORE INTO staff (id, business_id, name, title, phone, is_active, invite_code, experience_years, rating)
+      VALUES ('stf-queen-1', ?, 'Bosh mutaxassis', 'Go‘zallik ustasi', '+998908862540', 1, 'STF-2001', 5, 5.0)
+    `).run(queenBizId);
+    db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-queen-1', 'srv-queen-1')`).run();
+
     // Nasaf dental application record marked APPROVED
     db.prepare(`
       INSERT OR REPLACE INTO business_applications (
@@ -2443,6 +2474,26 @@ app.use((req, res, next) => {
 });
 
 // 2. Safe static serving for uploaded photos
+// 2. Safe static serving for uploaded photos (from DB or disk so images survive container restarts and work via /api/uploads/:filename)
+db.exec(`CREATE TABLE IF NOT EXISTS uploaded_files (filename TEXT PRIMARY KEY, mime_type TEXT NOT NULL, data_base64 TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+app.get(['/api/uploads/:filename', '/uploads/:filename'], (req, res) => {
+  const filename = path.basename(req.params.filename || '');
+  if (!filename) return res.status(404).end();
+  try {
+    const row = db.prepare('SELECT mime_type, data_base64 FROM uploaded_files WHERE filename = ?').get(filename) as any;
+    if (row && row.data_base64) {
+      const imgBuf = Buffer.from(row.data_base64, 'base64');
+      res.setHeader('Content-Type', row.mime_type || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.send(imgBuf);
+    }
+  } catch {}
+  const diskPath = path.join(uploadsDir, filename);
+  if (fs.existsSync(diskPath)) {
+    return res.sendFile(diskPath);
+  }
+  return res.status(404).json({ error: 'Image not found' });
+});
 app.use('/uploads', express.static(uploadsDir));
 
 app.use(express.json({ limit: '10mb' }));
@@ -7108,6 +7159,11 @@ function getUserBusiness(userId: string, requestedBizId?: string): any | null {
   // Default to first owned business
   const firstOwned = db.prepare('SELECT * FROM businesses WHERE owner_id = ? ORDER BY created_at ASC LIMIT 1').get(userId);
   if (firstOwned) return firstOwned;
+  const uRoleRow = db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+  if (uRoleRow && ['SUPER_ADMIN', 'ADMIN', 'FOUNDER'].includes(uRoleRow.role)) {
+    const anyBiz = db.prepare("SELECT * FROM businesses WHERE status = 'APPROVED' ORDER BY created_at ASC LIMIT 1").get();
+    if (anyBiz) return anyBiz;
+  }
 
   // Otherwise check memberships
   return db.prepare(`
@@ -7132,9 +7188,9 @@ app.get('/api/business/my-businesses', requireAuth, (req, res) => {
     FROM businesses b
     LEFT JOIN business_memberships bm ON b.id = bm.business_id AND bm.user_id = ?
     LEFT JOIN categories c ON b.category_id = c.id
-    WHERE b.owner_id = ? OR bm.user_id = ?
+    WHERE b.owner_id = ? OR bm.user_id = ? OR EXISTS (SELECT 1 FROM users u WHERE u.id = ? AND u.role IN ('SUPER_ADMIN', 'ADMIN', 'FOUNDER'))
     ORDER BY b.created_at DESC
-  `).all(user.id, user.id, user.id);
+  `).all(user.id, user.id, user.id, user.id);
 
   const activeSetting = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(`active_biz_${user.id}`) as any;
   const activeBizId = activeSetting?.value || (businesses[0] as any)?.id || null;
@@ -14723,7 +14779,14 @@ app.post('/api/upload', requireAuth, (req, res) => {
   const filePath = path.join(uploadsDir, safeName);
   fs.writeFileSync(filePath, buffer);
 
-  const fileUrl = `/uploads/${safeName}`;
+  const fileUrl = `/api/uploads/${safeName}`;
+  const finalMime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS uploaded_files (filename TEXT PRIMARY KEY, mime_type TEXT NOT NULL, data_base64 TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+    db.prepare(`INSERT OR REPLACE INTO uploaded_files (filename, mime_type, data_base64) VALUES (?, ?, ?)`).run(safeName, finalMime, buffer.toString('base64'));
+  } catch (e) {
+    console.error('[Upload DB Save Error]:', e);
+  }
   res.json({
     success: true,
     url: fileUrl,

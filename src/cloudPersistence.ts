@@ -21,7 +21,8 @@ const BACKUP_TABLES = [
   'reviews',
   'subscription_transactions',
   'extra_service_orders',
-  'promo_codes'
+  'promo_codes',
+  'uploaded_files'
 ];
 
 const LOCAL_SNAPSHOT_PATH = path.join(process.cwd(), 'data', 'cloud-snapshot.json');

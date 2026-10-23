@@ -58,6 +58,7 @@ export const BusinessDetail: React.FC<BusinessDetailProps> = ({
   // Gallery state
   const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
   const [isLightboxOpen, setIsLightboxOpen] = useState<boolean>(false);
+  const [failedHeroUrls, setFailedHeroUrls] = useState<Record<string, boolean>>({});
 
   // Description language toggle
   const [descLang, setDescLang] = useState<'uz' | 'ru'>('uz');
@@ -263,13 +264,18 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
           <div className="lg:col-span-7 space-y-3.5">
             {/* Primary Main Viewport */}
             <div className="relative h-72 sm:h-96 w-full rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 overflow-hidden group flex items-center justify-center">
-              {activePhoto && activePhoto.url ? (
+              {activePhoto && activePhoto.url && !failedHeroUrls[activePhoto.url] ? (
                 <>
                   <img
                     src={activePhoto.url}
                     alt={activePhoto.title}
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                     referrerPolicy="no-referrer"
+                    onError={() => {
+                      if (activePhoto?.url) {
+                        setFailedHeroUrls((prev) => ({ ...prev, [activePhoto.url]: true }));
+                      }
+                    }}
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-black/20 pointer-events-none" />
                 </>

@@ -43,6 +43,7 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [categoriesList, setCategoriesList] = useState<any[]>([]);
+  const [myBusinesses, setMyBusinesses] = useState<any[]>([]);
 
   // TV Queue Board & Extra Features
   const [showQueueBoardModal, setShowQueueBoardModal] = useState<boolean>(false);
@@ -226,6 +227,7 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
           setProfileIsTemporarilyClosed(Boolean(res.business.is_temporarily_closed));
         }
         api.getCategories().then(setCategoriesList).catch(() => {});
+        api.getMyBusinesses().then((mb) => setMyBusinesses(mb?.businesses || [])).catch(() => {});
       }
     } catch (err) {
       console.error('Error loading business:', err);
@@ -265,13 +267,12 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('Fayl hajmi 5 MB dan oshmasligi kerak', 'error');
+    if (file.size > 15 * 1024 * 1024) {
+      showToast('Fayl hajmi 15 MB dan oshmasligi kerak', 'error');
       return;
     }
-    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!validTypes.includes(file.type)) {
-      showToast('Faqat JPG, PNG yoki WebP formatdagi rasmlar qabul qilinadi', 'error');
+    if (file.type && !file.type.startsWith('image/')) {
+      showToast('Faqat rasm fayllari (JPG, PNG, WebP) qabul qilinadi', 'error');
       return;
     }
 
@@ -280,7 +281,27 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
       const res = await api.uploadImage(file);
       if (res?.url) {
         setProfileLogoUrl(res.url);
-        showToast('Rasm muvaffaqiyatli yuklandi! Profilni saqlash tugmasini bosing.', 'success');
+        // Immediately persist logo_url to business profile so user doesn't lose it if they don't click Save
+        try {
+          const saved = await api.updateBusinessProfileSettings({
+            name: profileName || business?.name,
+            phone: profilePhone || business?.phone,
+            address: profileAddress || business?.address,
+            district: profileDistrict || business?.district,
+            description: profileDescription || business?.description,
+            logo_url: res.url,
+            category_id: profileCategoryId || business?.category_id,
+            latitude: profileLat ? Number(profileLat) : (business?.latitude ?? null),
+            longitude: profileLng ? Number(profileLng) : (business?.longitude ?? null),
+            is_temporarily_closed: profileIsTemporarilyClosed ? 1 : 0
+          });
+          if (saved?.business) {
+            setBusiness(saved.business);
+          }
+          showToast('Rasm yuklandi va profilga avtomatik saqlandi! ✅', 'success');
+        } catch {
+          showToast('Rasm yuklandi! Saqlash tugmasini bosing.', 'success');
+        }
       }
     } catch (err: any) {
       showToast(err.message || 'Rasm yuklashda xatolik', 'error');
@@ -948,6 +969,30 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-black text-slate-900">{business.name}</h1>
+              {myBusinesses.length > 1 && (
+                <select
+                  aria-label="Biznesni almashtirish"
+                  value={business.id}
+                  onChange={async (e) => {
+                    const nextId = e.target.value;
+                    if (!nextId || nextId === business.id) return;
+                    try {
+                      await api.switchActiveBusiness(nextId);
+                      await loadCurrentBusiness();
+                      showToast('Faol muassasa almashtirildi!', 'success');
+                    } catch (err: any) {
+                      showToast(err.message || 'Muassasani almashtirishda xatolik', 'error');
+                    }
+                  }}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 cursor-pointer"
+                >
+                  {myBusinesses.map((mb: any) => (
+                    <option key={mb.id} value={mb.id}>
+                      🏢 {mb.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               {isTrial ? (
                 <>
                   <span className="px-2.5 py-0.5 bg-blue-100 text-blue-800 border border-blue-200 text-[10px] font-black rounded-full uppercase">
@@ -3203,7 +3248,7 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                       <span>{uploadingLogo ? 'Yuklanmoqda...' : 'Rasm Yuklash'}</span>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept="image/*"
                         className="hidden"
                         disabled={uploadingLogo}
                         onChange={handleLogoUpload}

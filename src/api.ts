@@ -462,25 +462,55 @@ export const api = {
   getBusinessWorkingHours: () => request<any[]>('/api/business/working-hours'),
   updateBusinessWorkingHours: (hours: any[]) => request<any>('/api/business/working-hours', { method: 'PUT', body: JSON.stringify({ hours }) }),
   uploadImage: async (file: File): Promise<{ success: boolean; url: string; filename: string }> => {
-    return new Promise<{ success: boolean; url: string; filename: string }>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const res = await request<{ success: boolean; url: string; filename: string }>('/api/upload', {
-            method: 'POST',
-            body: JSON.stringify({
-              data: reader.result as string,
-              filename: file.name,
-              mimeType: file.type
-            })
-          });
-          resolve(res);
-        } catch (e) {
-          reject(e);
-        }
-      };
-      reader.onerror = () => reject(new Error('Faylni o‘qishda xatolik yuz berdi'));
-      reader.readAsDataURL(file);
+    const compressImageToDataUrl = (inputFile: File): Promise<{ dataUrl: string; mimeType: string }> =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const rawDataUrl = reader.result as string;
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const maxDim = 1200;
+              let { width, height } = img;
+              if (width > maxDim || height > maxDim) {
+                if (width > height) {
+                  height = Math.round((height * maxDim) / width);
+                  width = maxDim;
+                } else {
+                  width = Math.round((width * maxDim) / height);
+                  height = maxDim;
+                }
+              }
+              const canvas = document.createElement('canvas');
+              canvas.width = width || 800;
+              canvas.height = height || 600;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const compressed = canvas.toDataURL('image/jpeg', 0.85);
+                resolve({ dataUrl: compressed, mimeType: 'image/jpeg' });
+                return;
+              }
+            } catch {}
+            resolve({ dataUrl: rawDataUrl, mimeType: inputFile.type || 'image/jpeg' });
+          };
+          img.onerror = () => resolve({ dataUrl: rawDataUrl, mimeType: inputFile.type || 'image/jpeg' });
+          img.src = rawDataUrl;
+        };
+        reader.onerror = () => reject(new Error('Faylni o‘qishda xatolik yuz berdi'));
+        reader.readAsDataURL(inputFile);
+      });
+
+    const { dataUrl, mimeType } = await compressImageToDataUrl(file);
+    return request<{ success: boolean; url: string; filename: string }>('/api/upload', {
+      method: 'POST',
+      body: JSON.stringify({
+        data: dataUrl,
+        filename: file.name,
+        mimeType
+      })
     });
   },
   promoteBusiness: (data: { duration_days?: number; payment_method?: string }) =>

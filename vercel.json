@@ -26,6 +26,10 @@
       "destination": "https://navbat-bor-platforma.onrender.com/api/:match*"
     },
     {
+      "source": "/uploads/:match*",
+      "destination": "https://navbat-bor-platforma.onrender.com/api/uploads/:match*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

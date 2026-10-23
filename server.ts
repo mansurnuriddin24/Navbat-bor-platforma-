@@ -1194,7 +1194,7 @@ async function sendTelegramAlert(options: TelegramAlertOptions): Promise<{ succe
   const { chatId, message, recipientType = 'SYSTEM', recipientId = null, botToken, replyMarkup } = options;
   const defaultBusinessToken = getSetting('telegram_business_bot_token') || process.env.BUSINESS_BOT_TOKEN || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
   const defaultCustomerToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
-  const token = botToken || (recipientType === 'BUSINESS' ? (defaultBusinessToken || defaultCustomerToken) : defaultCustomerToken);
+  const token = botToken || defaultCustomerToken;
   const targetChatId = chatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
   const logId = 'tg-' + crypto.randomUUID().slice(0, 10);
 
@@ -1268,6 +1268,9 @@ function enqueueTelegramNotification(options: {
   message: string;
 }): boolean {
   try {
+    if (['TRIAL_EXPIRING_3D', 'TRIAL_EXPIRING_1D', 'SUB_EXPIRING_3D'].includes(options.eventType)) {
+      return false;
+    }
     const queueId = 'tq-' + crypto.randomUUID().slice(0, 10);
     const res = db.prepare(`
       INSERT OR IGNORE INTO telegram_notification_queue (
@@ -8932,6 +8935,23 @@ function getBusinessForTelegramUser(chatId: string, telegramUserId?: string): {
   permissions: string[];
 } | null {
   const tgId = telegramUserId || chatId;
+  const preferredBizId = getSetting('tg_active_biz_' + chatId);
+  if (preferredBizId) {
+    const prefBiz = db.prepare(`
+      SELECT b.*, u.name as owner_name, u.phone as owner_phone, u.id as owner_user_id
+      FROM businesses b
+      JOIN users u ON b.owner_id = u.id
+      WHERE b.id = ?
+    `).get(preferredBizId) as any;
+    if (prefBiz) {
+      return {
+        business: prefBiz,
+        user: { id: prefBiz.owner_user_id, name: prefBiz.owner_name, phone: prefBiz.owner_phone },
+        role: 'OWNER',
+        permissions: ['CALL_NEXT_CUSTOMER', 'VIEW_QUEUE', 'MARK_COMPLETED', 'MARK_NO_SHOW', 'VIEW_STATISTICS']
+      };
+    }
+  }
 
   // 1. Direct owner check by telegram_chat_id or telegram_user_id on businesses
   const bizByTg = db.prepare(`
@@ -8984,7 +9004,8 @@ function getBusinessForTelegramUser(chatId: string, telegramUserId?: string): {
   `).get(chatId, tgId) as any;
 
   if (adminUser) {
-    const defaultBiz = db.prepare('SELECT * FROM businesses ORDER BY created_at ASC LIMIT 1').get() as any;
+    const resolvedAdmin = getAdminForTelegramUser(chatId, tgId) || adminUser;
+    const defaultBiz = db.prepare('SELECT * FROM businesses ORDER BY created_at DESC LIMIT 1').get() as any;
     return {
       business: defaultBiz,
       user: adminUser,
@@ -9091,7 +9112,7 @@ function getBusinessKeyboard(userRole?: string) {
     [{ text: '👤 Hozirgi mijoz' }, { text: '📋 Jonli navbat' }],
     [{ text: '📅 Bugungi bronlar' }, { text: '➕ Navbatga qo‘shish' }],
     [{ text: '📊 Bugungi hisobot' }, { text: '🌐 Boshqaruv paneli' }],
-    [{ text: '👤 Mijoz rejimiga qaytish' }]
+    [{ text: '🔄 Muassasani almashtirish' }, { text: '👤 Mijoz rejimiga qaytish' }]
   ];
   if (['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(userRole || '')) {
     keyboard.push([{ text: '👑 Admin rejimiga o‘tish' }]);
@@ -10680,6 +10701,15 @@ async function processTelegramUpdate(update: any): Promise<void> {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '/register' };
     } else if (cbData === 'biz_info') {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '/biznes' };
+    } else if (cbData && cbData.startsWith('switch_biz_')) {
+      const targetBizId = cbData.replace('switch_biz_', '');
+      setSetting('tg_active_biz_' + cbChatId, targetBizId);
+      setTelegramUserMode(cbChatId, 'BUSINESS');
+      const bizInfo = getBusinessForTelegramUser(cbChatId, cbUserId);
+      if (bizInfo) {
+        await sendTelegramBusinessPanel(cbChatId, bizInfo);
+      }
+      return;
     } else if (cbData === 'navbat_olish') {
       update.message = { chat: { id: cbChatId }, from: cb.from, text: '🎫 Navbat olish' };
     } else {
@@ -10692,7 +10722,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
   if (!message || !message.chat) return;
 
   const chatId = String(message.chat.id);
-  let text = (message.text || '').trim();
+  const rawText = (message.text || '').trim();
+  let text = rawText.startsWith('/') ? rawText : rawText.replace(/['’ʼ`ʻ]/g, '‘');
   const from = message.from || {};
 
   try {
@@ -10706,6 +10737,36 @@ async function processTelegramUpdate(update: any): Promise<void> {
     const adminUser = getAdminForTelegramUser(chatId, telegramUserId);
 
     // --- A. MODE SWITCHING COMMANDS ---
+    if (text === '🔄 Muassasani almashtirish' || text === '/switch_business') {
+      const allBiz = (adminUser
+        ? db.prepare("SELECT id, name, address FROM businesses WHERE status IN ('APPROVED', 'ACTIVE') ORDER BY created_at DESC").all()
+        : db.prepare(`
+            SELECT b.id, b.name, b.address
+            FROM businesses b
+            JOIN users u ON b.owner_id = u.id
+            WHERE (b.telegram_chat_id = ? OR b.telegram_user_id = ? OR u.telegram_chat_id = ? OR u.telegram_user_id = ?)
+            ORDER BY b.created_at DESC
+          `).all(chatId, telegramUserId, chatId, telegramUserId)
+      ) as any[];
+
+      if (allBiz.length > 0) {
+        const currentBizId = bizInfo?.business?.id;
+        await sendTelegramAlert({
+          chatId,
+          message: `🏢 <b>Boshqaruv uchun muassasani tanlang:</b>\n━━━━━━━━━━━━━━━━\nQaysi muassasaning navbatlari va bronlarini boshqarmoqchisiz?`,
+          replyMarkup: {
+            inline_keyboard: allBiz.map((b: any) => ([{
+              text: `${b.id === currentBizId ? '✅ ' : '🏛 '}${b.name}`,
+              callback_data: `switch_biz_${b.id}`
+            }]))
+          }
+        });
+      } else {
+        await sendTelegramAlert({ chatId, message: 'ℹ️ Sizga biriktirilgan bizneslar topilmadi.' });
+      }
+      return;
+    }
+
     if (text === '🏢 Biznes rejimiga o‘tish' || text === '/biznes_rejimi' || text === '/operator') {
       if (bizInfo) {
         setTelegramUserMode(chatId, 'BUSINESS');
@@ -12521,6 +12582,34 @@ async function startTelegramPolling() {
   const token = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
   if (!token || token.trim().length <= 10) {
     console.log('[Telegram Poller] TELEGRAM_BOT_TOKEN not configured, polling skipped');
+    return;
+  }
+
+  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  if (isRenderProd) {
+    const renderBaseUrl = (process.env.RENDER_EXTERNAL_URL || 'https://navbat-bor-platforma.onrender.com').replace(/\/+$/, '');
+    const webhookUrl = `${renderBaseUrl}/api/telegram/webhook`;
+    const ensureCustomerWebhook = async () => {
+      try {
+        const infoRes = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+        const info = await infoRes.json() as any;
+        if (info?.result?.url !== webhookUrl) {
+          const whRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: webhookUrl,
+              drop_pending_updates: false,
+              allowed_updates: ['message', 'edited_message', 'callback_query']
+            })
+          });
+          const whData = await whRes.json() as any;
+          console.log(`[Telegram Webhook] Locked customer bot webhook to ${webhookUrl}: ${whData.ok ? 'OK' : whData.description}`);
+        }
+      } catch (e) {}
+    };
+    await ensureCustomerWebhook();
+    setInterval(ensureCustomerWebhook, 20000);
     return;
   }
 

@@ -589,6 +589,21 @@ export function getBusinessBotUserAuth(db: DatabaseSync, telegramUserId: string,
   // 4. Approved Business Owner check
   let bizAsOwner: any = null;
   try {
+    const stateRow = db.prepare('SELECT state_data_json FROM business_bot_user_states WHERE chat_id = ?').get(cId) as any;
+    if (stateRow?.state_data_json) {
+      const parsed = JSON.parse(stateRow.state_data_json);
+      if (parsed.selected_business_id) {
+        bizAsOwner = db.prepare(`
+          SELECT b.*, u.id as owner_user_id, u.name as owner_name, u.phone as owner_phone, u.email as owner_email
+          FROM businesses b
+          JOIN users u ON b.owner_id = u.id
+          WHERE b.id = ? AND b.status IN ('APPROVED', 'ACTIVE')
+        `).get(parsed.selected_business_id);
+      }
+    }
+  } catch (e) {}
+  if (!bizAsOwner) {
+  try {
     bizAsOwner = db.prepare(`
       SELECT b.*, u.id as owner_user_id, u.name as owner_name, u.phone as owner_phone, u.email as owner_email
       FROM businesses b
@@ -599,6 +614,7 @@ export function getBusinessBotUserAuth(db: DatabaseSync, telegramUserId: string,
     `).get(idStr, idStr, idStr, idStr);
   } catch (e) {}
 
+  }
   // If not found directly, check via approved application
   if (!bizAsOwner) {
     try {
@@ -747,6 +763,8 @@ export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBo
     keyboard.push([
       { text: '🏢 Biznesni almashtirish' }
     ]);
+  } else if (role === 'BUSINESS_OWNER') {
+    keyboard.push([{ text: '🏢 Biznesni almashtirish' }]);
   }
 
   return {
@@ -1666,7 +1684,8 @@ export async function processBusinessBotUpdate(update: any, db: DatabaseSync): P
 async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<void> {
   const chatId = String(msg.chat?.id);
   const tgUserId = String(msg.from?.id || chatId);
-  const text = (msg.text || '').trim();
+  const rawText = (msg.text || '').trim();
+  const text = rawText.startsWith('/') ? rawText : rawText.replace(/['’ʼ`ʻ]/g, '‘');
 
   const auth = getBusinessBotUserAuth(db, tgUserId, chatId);
   const lang = auth.language;
@@ -2573,7 +2592,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     }
 
     // Super Admin Switch Business Command
-    if (auth.role === 'SUPER_ADMIN' && (text === '🏢 Biznesni almashtirish' || text === '/bizneslar')) {
+    if ((auth.role === 'SUPER_ADMIN' || auth.role === 'BUSINESS_OWNER') && (text === '🏢 Biznesni almashtirish' || text === '🔄 Muassasani almashtirish' || text === '/bizneslar')) {
       const allBiz = db.prepare("SELECT id, name FROM businesses WHERE status IN ('APPROVED', 'ACTIVE') ORDER BY name ASC LIMIT 10").all() as any[];
       const buttons = allBiz.map(b => [{ text: `🏢 ${b.name}`, callback_data: `admin_switch_biz_${b.id}` }]);
       await sendBusinessBotMessage(
@@ -3249,7 +3268,7 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
     if (targetBiz) {
       setBotUserState(db, cbChatId, cbUserId, null, { selected_business_id: targetBiz.id }, lang);
       await sendBusinessBotMessage(cbChatId, `✅ Boshqaruv <b>${targetBiz.name}</b> muassasasiga o‘tkazildi!`, {
-        replyMarkup: getBusinessDashboardKeyboard(lang, 'SUPER_ADMIN')
+        replyMarkup: getBusinessDashboardKeyboard(lang, auth.role)
       });
     }
     return;
@@ -3787,6 +3806,37 @@ export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
   isBusinessPollingActive = true;
 
   console.log('[Business Bot Poller] Starting long polling for business bot...');
+
+  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  if (isRenderProd) {
+    const renderBaseUrl = (process.env.RENDER_EXTERNAL_URL || 'https://navbat-bor-platforma.onrender.com').replace(/\/+$/, '');
+    const webhookUrl = `${renderBaseUrl}/api/telegram/business-bot-webhook`;
+    const secret = getBusinessBotWebhookSecret();
+    const ensureBusinessWebhook = async () => {
+      try {
+        const infoRes = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+        const info = await infoRes.json() as any;
+        if (info?.result?.url !== webhookUrl) {
+          const payload: any = {
+            url: webhookUrl,
+            drop_pending_updates: false,
+            allowed_updates: ['message', 'edited_message', 'callback_query']
+          };
+          if (secret) payload.secret_token = secret;
+          const whRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const whData = await whRes.json() as any;
+          console.log(`[Business Bot Webhook] Locked business bot webhook to ${webhookUrl}: ${whData.ok ? 'OK' : whData.description}`);
+        }
+      } catch (e) {}
+    };
+    await ensureBusinessWebhook();
+    setInterval(ensureBusinessWebhook, 20000);
+    return;
+  }
 
   // Reset any existing webhook for polling
   try {

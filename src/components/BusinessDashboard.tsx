@@ -145,6 +145,9 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
   const [newStaffName, setNewStaffName] = useState<string>('');
   const [newStaffTitle, setNewStaffTitle] = useState<string>('');
   const [newStaffPhone, setNewStaffPhone] = useState<string>('+998');
+  const [newStaffExperience, setNewStaffExperience] = useState<number>(5);
+  const [newStaffBio, setNewStaffBio] = useState<string>('');
+  const [sendingDailyReport, setSendingDailyReport] = useState<boolean>(false);
   const [editingStaffPricing, setEditingStaffPricing] = useState<StaffMember | null>(null);
   const [staffCustomPrices, setStaffCustomPrices] = useState<Record<string, { enabled: boolean; price: string }>>({});
 
@@ -766,10 +769,14 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
         name: newStaffName,
         title: newStaffTitle,
         phone: newStaffPhone,
+        experience_years: newStaffExperience,
+        bio: newStaffBio,
       });
       setShowAddStaff(false);
       setNewStaffName('');
       setNewStaffTitle('');
+      setNewStaffExperience(5);
+      setNewStaffBio('');
       const updated = await api.getBusinessStaff();
       setStaff(updated);
       showToast('Yangi xodim qo‘shildi', 'success');
@@ -1090,6 +1097,27 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
 
             {/* Quick Export Action Buttons */}
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                id="biz-dash-tg-report-btn"
+                disabled={sendingDailyReport}
+                onClick={async () => {
+                  setSendingDailyReport(true);
+                  try {
+                    const res = await api.sendDailyBusinessReport();
+                    showToast(res.message || 'Kunlik hisobot Telegramga yuborildi! 📊', 'success');
+                  } catch (err: any) {
+                    showToast(err.message || 'Hisobot yuborishda xatolik', 'error');
+                  } finally {
+                    setSendingDailyReport(false);
+                  }
+                }}
+                className="px-3.5 py-2 bg-[#2AABEE]/10 hover:bg-[#2AABEE]/20 text-[#0088cc] border border-[#2AABEE]/30 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-[0.98]"
+                title="Bugungi moliyaviy va mutaxassislar kesimidagi hisobotni Telegramga yuborish"
+              >
+                <span>{sendingDailyReport ? 'Yuborilmoqda...' : '📊 Hisobotni Telegramga yuborish'}</span>
+              </button>
+
               <button
                 type="button"
                 id="biz-dash-export-modal-btn"
@@ -2070,6 +2098,14 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                         </span>
                       </div>
                       <p className="text-xs text-slate-500">{st.title}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
+                        <span className="font-bold text-amber-600">⭐️ {st.rating ? Number(st.rating).toFixed(1) : '5.0'}</span>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-600 font-medium">{st.experience_years || 5} yil tajriba</span>
+                      </div>
+                      {st.bio && (
+                        <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{st.bio}</p>
+                      )}
                       <p className="text-[11px] text-slate-400 mt-1 font-mono">{st.phone || 'Telefon kiritilmagan'}</p>
                     </div>
                   </div>
@@ -2258,6 +2294,27 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                       type="tel"
                       value={newStaffPhone}
                       onChange={(e) => setNewStaffPhone(e.target.value)}
+                      className="w-full border border-slate-300 rounded-xl p-2.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Ish tajribasi (yil)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={newStaffExperience}
+                      onChange={(e) => setNewStaffExperience(Number(e.target.value))}
+                      className="w-full border border-slate-300 rounded-xl p-2.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Qisqacha ma’lumot (Bio, ixtiyoriy)</label>
+                    <textarea
+                      value={newStaffBio}
+                      onChange={(e) => setNewStaffBio(e.target.value)}
+                      rows={2}
+                      placeholder="Masalan: Oliy toifali stomatolog, 10 yillik tajriba"
                       className="w-full border border-slate-300 rounded-xl p-2.5"
                     />
                   </div>

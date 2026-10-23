@@ -31,7 +31,8 @@ import {
   notifyBusinessOwnerViaBusinessBot,
   setBusinessBotHooks,
   getBusinessBotUsername,
-  sendBusinessBotMessage
+  sendBusinessBotMessage,
+  getBusinessDailyStats
 } from './src/telegramBusinessBot.ts';
 
 // --- DATABASE INITIALIZATION ---
@@ -311,6 +312,26 @@ try { db.exec(`ALTER TABLE staff ADD COLUMN telegram_user_id TEXT;`); } catch(e)
 try { db.exec(`ALTER TABLE staff ADD COLUMN role TEXT DEFAULT 'EMPLOYEE';`); } catch(e){}
 try { db.exec(`ALTER TABLE staff ADD COLUMN invite_code TEXT;`); } catch(e){}
 try { db.exec(`ALTER TABLE staff_services ADD COLUMN custom_price_uzs INTEGER;`); } catch(e){}
+try { db.exec(`ALTER TABLE staff ADD COLUMN experience_years INTEGER DEFAULT 5;`); } catch(e){}
+try { db.exec(`ALTER TABLE staff ADD COLUMN rating REAL DEFAULT 5.0;`); } catch(e){}
+try { db.exec(`ALTER TABLE staff ADD COLUMN bio TEXT;`); } catch(e){}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS booking_waitlist (
+      id TEXT PRIMARY KEY,
+      business_id TEXT NOT NULL,
+      service_id TEXT,
+      staff_id TEXT,
+      desired_date TEXT NOT NULL,
+      customer_id TEXT,
+      customer_name TEXT NOT NULL,
+      customer_phone TEXT NOT NULL,
+      telegram_chat_id TEXT,
+      status TEXT DEFAULT 'WAITING',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+} catch(e){}
 
 // Auto-generate invite_code for any staff member missing one
 try {
@@ -1234,10 +1255,10 @@ async function sendTelegramAlert(options: TelegramAlertOptions): Promise<{ succe
 let isQueueProcessing = false;
 
 function enqueueTelegramNotification(options: {
-  recipientType?: 'BUSINESS' | 'USER' | 'ADMIN';
+  recipientType?: 'BUSINESS' | 'USER' | 'ADMIN' | 'CUSTOMER';
   recipientId?: string | null;
   chatId: string;
-  eventType: 'TRIAL_EXPIRING_3D' | 'TRIAL_EXPIRING_1D' | 'SUB_EXPIRING_3D' | 'SUB_EXPIRED' | 'PAYMENT_SUCCESS' | 'PAYMENT_FAILED';
+  eventType: 'TRIAL_EXPIRING_3D' | 'TRIAL_EXPIRING_1D' | 'SUB_EXPIRING_3D' | 'SUB_EXPIRED' | 'PAYMENT_SUCCESS' | 'PAYMENT_FAILED' | 'DAILY_EVENING_REPORT' | 'WAITLIST_SLOT_FREED';
   dedupKey: string;
   message: string;
 }): boolean {
@@ -3237,6 +3258,157 @@ app.get('/api/businesses/:id/available-slots', (req, res) => {
 });
 
 // CREATE BOOKING (CRITICAL: Strict Double-Booking Protection with atomic transaction locking & Auto-Auth)
+
+// --- SMART WAITLIST ENDPOINT (Bo'sh joy xabarnomasi) ---
+app.post('/api/waitlist', (req, res) => {
+  const user = getAuthUser(req);
+  const { business_id, service_id, staff_id, desired_date, customer_name, customer_phone } = req.body || {};
+
+  if (!business_id || !desired_date || !customer_phone) {
+    return res.status(400).json({ error: 'Muassasa, sana va telefon raqamingizni kiriting' });
+  }
+
+  const cleanDigits = String(customer_phone).replace(/[^0-9]/g, '');
+  if (cleanDigits.length < 7) {
+    return res.status(400).json({ error: 'Telefon raqami noto‘g‘ri' });
+  }
+  const formattedPhone = '+998' + cleanDigits.slice(-9);
+  const last9 = cleanDigits.slice(-9);
+
+  let telegramChatId = user?.telegram_chat_id || null;
+  let customerId = user?.id || null;
+
+  if (!telegramChatId) {
+    const matchedUser = db.prepare('SELECT id, telegram_chat_id FROM users WHERE phone LIKE ? LIMIT 1').get(`%${last9}%`) as any;
+    if (matchedUser) {
+      customerId = customerId || matchedUser.id;
+      telegramChatId = matchedUser.telegram_chat_id || null;
+    }
+  }
+
+  const existing = db.prepare(`
+    SELECT id FROM booking_waitlist
+    WHERE business_id = ? AND desired_date = ? AND customer_phone LIKE ? AND status = 'WAITING'
+  `).get(business_id, desired_date, `%${last9}%`) as any;
+
+  if (existing) {
+    return res.json({
+      success: true,
+      id: existing.id,
+      telegramLinked: Boolean(telegramChatId),
+      message: 'Siz allaqachon ushbu sanadagi kutish ro‘yxatiga yozilgansiz. Joy bo‘shashi bilan xabar beramiz!'
+    });
+  }
+
+  const id = 'wl-' + crypto.randomUUID().slice(0, 8);
+  db.prepare(`
+    INSERT INTO booking_waitlist (
+      id, business_id, service_id, staff_id, desired_date,
+      customer_id, customer_name, customer_phone, telegram_chat_id, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'WAITING')
+  `).run(
+    id,
+    business_id,
+    service_id || null,
+    staff_id || null,
+    desired_date,
+    customerId,
+    (customer_name || user?.name || 'Mijoz').trim(),
+    formattedPhone,
+    telegramChatId
+  );
+
+  res.status(201).json({
+    success: true,
+    id,
+    telegramLinked: Boolean(telegramChatId),
+    botUrl: `https://t.me/${getBotUsername()}?start=waitlist_${id}`,
+    message: 'Kutish ro‘yxatiga qo‘shildingiz! Bo‘sh joy ochilishi bilan sizga xabar yuboramiz.'
+  });
+});
+
+// --- DAILY EVENING FINANCIAL & KPI REPORT SCHEDULER (20:00 Tashkent Time) ---
+async function checkAndSendEveningBusinessReports(forceBusinessId?: string) {
+  try {
+    const now = new Date();
+    const tashkentStr = now.toLocaleString('en-US', { timeZone: 'Asia/Tashkent' });
+    const tashkentDate = new Date(tashkentStr);
+    const currentHour = tashkentDate.getHours();
+    const todayStr = tashkentDate.toISOString().slice(0, 10);
+
+    // Run automatically at 20:00-20:59 Tashkent time, or immediately if forceBusinessId is specified
+    if (!forceBusinessId && currentHour !== 20) return;
+
+    const businesses = forceBusinessId
+      ? (db.prepare('SELECT * FROM businesses WHERE id = ?').all(forceBusinessId) as any[])
+      : (db.prepare("SELECT * FROM businesses WHERE status IN ('APPROVED', 'ACTIVE')").all() as any[]);
+
+    for (const biz of businesses) {
+      const dedupKey = `EVENING_REPORT:${biz.id}:${todayStr}`;
+      if (!forceBusinessId) {
+        const alreadySent = db.prepare('SELECT id FROM telegram_notification_queue WHERE dedup_key = ?').get(dedupKey);
+        if (alreadySent) continue;
+      }
+
+      const stats = getBusinessDailyStats(db, biz.id);
+      // Only send automatic evening report if there was activity today (or if manually requested)
+      if (!forceBusinessId && stats.completedToday === 0 && stats.bookingsToday === 0 && stats.waitingCount === 0) {
+        continue;
+      }
+
+      let staffLines = '';
+      if (stats.staffBreakdown && stats.staffBreakdown.length > 0) {
+        staffLines = `\n👨‍⚕️ <b>Mutaxassislar samaradorligi:</b>\n`;
+        stats.staffBreakdown.forEach((st: any, idx: number) => {
+          staffLines += `  ${idx + 1}. <b>${st.name}</b> — ${st.servedCount} ta mijoz (💰 ${Number(st.revenue).toLocaleString()} so‘m)\n`;
+        });
+      }
+
+      const reportMsg =
+        `🌙 <b>KUNLIK YAKUNIY HISOBOT — ${biz.name}</b>\n` +
+        `📅 Sana: <b>${todayStr}</b>\n` +
+        `━━━━━━━━━━━━━━━━\n` +
+        `✅ Xizmat ko‘rsatilgan mijozlar: <b>${stats.completedToday} nafar</b>\n` +
+        `📅 Bugungi bronlar soni: <b>${stats.bookingsToday} ta</b>\n` +
+        `❌ Bekor qilingan / Kelmadi: <b>${stats.cancelledToday || 0} ta</b>\n` +
+        `💰 <b>Jami kunlik tushum: ${stats.revenueEstimate.toLocaleString()} so‘m</b>` +
+        staffLines +
+        `━━━━━━━━━━━━━━━━\n` +
+        `🌟 <i>NavbatBor bilan ishingiz barakali bo‘lsin!</i>`;
+
+      const ownerUser = db.prepare('SELECT telegram_chat_id FROM users WHERE id = ?').get(biz.owner_id) as any;
+      const targetChat = biz.telegram_chat_id || ownerUser?.telegram_chat_id;
+
+      if (targetChat) {
+        enqueueTelegramNotification({
+          recipientType: 'BUSINESS',
+          recipientId: biz.id,
+          chatId: targetChat,
+          eventType: 'DAILY_EVENING_REPORT' as any,
+          dedupKey: forceBusinessId ? `MANUAL_REPORT:${biz.id}:${Date.now()}` : dedupKey,
+          message: reportMsg
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[Evening Report Scheduler Error]:', err);
+  }
+}
+
+setInterval(() => {
+  checkAndSendEveningBusinessReports();
+}, 10 * 60 * 1000);
+
+app.post('/api/business/send-daily-report', requireAuth, async (req, res) => {
+  const user = (req as any).user;
+  const biz = getUserBusiness(user.id);
+  if (!biz) return res.status(403).json({ error: 'Biznes topilmadi' });
+
+  await checkAndSendEveningBusinessReports(biz.id);
+  await processTelegramNotificationQueue();
+  res.json({ success: true, message: 'Kunlik moliyaviy hisobot Telegram botingizga yuborildi!' });
+});
+
 app.post('/api/bookings', async (req, res) => {
   let user = getAuthUser(req);
   let sessionToken: string | null = null;
@@ -5234,6 +5406,54 @@ export async function executeCancelBookingAtomic(params: CancelBookingParams): P
     throw txErr;
   }
 
+  // Smart Waitlist Notification: alert customers waiting for a free slot on this date
+  try {
+    const waitingCustomers = db.prepare(`
+      SELECT * FROM booking_waitlist
+      WHERE business_id = ? AND desired_date = ? AND status = 'WAITING'
+      ORDER BY created_at ASC LIMIT 10
+    `).all(booking.business_id, booking.booking_date) as any[];
+
+    for (const wc of waitingCustomers) {
+      let targetTg = wc.telegram_chat_id;
+      if (!targetTg && wc.customer_phone) {
+        const clean9 = wc.customer_phone.replace(/[^0-9]/g, '').slice(-9);
+        if (clean9.length >= 7) {
+          const uRow = db.prepare('SELECT id, telegram_chat_id FROM users WHERE phone LIKE ? AND telegram_chat_id IS NOT NULL LIMIT 1').get(`%${clean9}%`) as any;
+          if (uRow?.telegram_chat_id) targetTg = uRow.telegram_chat_id;
+        }
+      }
+      if (wc.customer_id) {
+        db.prepare('INSERT INTO notifications (id, user_id, title, message, type) VALUES (?, ?, ?, ?, ?)').run(
+          'notif-' + crypto.randomUUID().slice(0, 8),
+          wc.customer_id,
+          '🔔 Bo‘sh joy ochildi!',
+          `${booking.business_name} muassasasida ${booking.booking_date} sanasi soat ${booking.start_time} vaqti bo‘shadi!`,
+          'WAITLIST_ALERT'
+        );
+      }
+      if (targetTg) {
+        enqueueTelegramNotification({
+          recipientType: 'CUSTOMER',
+          recipientId: wc.customer_id || wc.id,
+          chatId: targetTg,
+          eventType: 'WAITLIST_SLOT_FREED' as any,
+          dedupKey: `WAITLIST_FREE:${wc.id}:${bookingId}`,
+          message:
+            `🎉 <b>Xushxabar! Siz kutgan sanada bo‘sh joy ochildi!</b>\n━━━━━━━━━━━━━━━━\n` +
+            `🏢 Muassasa: <b>${booking.business_name}</b>\n` +
+            `👨‍⚕️ Mutaxassis: <b>${booking.staff_name || 'Mutaxassis'}</b>\n` +
+            `📅 Sana: <b>${booking.booking_date}</b>\n` +
+            `⏰ Bo‘shagan vaqt: <b>${booking.start_time}</b>\n━━━━━━━━━━━━━━━━\n` +
+            `👉 <i>Vaqtni band qilish uchun saytga yoki botga kirib bron qiling!</i>`
+        });
+      }
+      db.prepare("UPDATE booking_waitlist SET status = 'NOTIFIED' WHERE id = ?").run(wc.id);
+    }
+  } catch (wErr) {
+    console.error('[Waitlist Notification Error]:', wErr);
+  }
+
   // Real-time broadcast to business dashboard via SSE
   try {
     broadcastQueueUpdate(booking.business_id, {
@@ -7154,7 +7374,7 @@ app.put('/api/business/staff/:id', requireAuth, (req, res) => {
   if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
 
   const { id } = req.params;
-  const { name, title, phone, is_active } = req.body;
+  const { name, title, phone, is_active, experience_years, rating, bio } = req.body;
 
   const staffRow = db.prepare('SELECT * FROM staff WHERE id = ? AND business_id = ?').get(id, biz.id) as any;
   if (!staffRow) return res.status(404).json({ error: 'Xodim topilmadi' });
@@ -7164,9 +7384,22 @@ app.put('/api/business/staff/:id', requireAuth, (req, res) => {
     SET name = COALESCE(?, name),
         title = COALESCE(?, title),
         phone = COALESCE(?, phone),
-        is_active = COALESCE(?, is_active)
+        is_active = COALESCE(?, is_active),
+        experience_years = COALESCE(?, experience_years),
+        rating = COALESCE(?, rating),
+        bio = COALESCE(?, bio)
     WHERE id = ? AND business_id = ?
-  `).run(name || null, title || null, phone || null, is_active !== undefined ? (is_active ? 1 : 0) : null, id, biz.id);
+  `).run(
+    name || null,
+    title || null,
+    phone || null,
+    is_active !== undefined ? (is_active ? 1 : 0) : null,
+    experience_years !== undefined ? Number(experience_years) : null,
+    rating !== undefined ? Number(rating) : null,
+    bio !== undefined ? bio : null,
+    id,
+    biz.id
+  );
 
   res.json({ success: true, message: 'Xodim ma’lumotlari yangilandi' });
 });
@@ -7232,15 +7465,26 @@ app.post('/api/business/staff', requireAuth, (req, res) => {
     }
   }
 
-  const { name, title, phone, avatar_url } = req.body;
+  const { name, title, phone, avatar_url, experience_years, rating, bio } = req.body;
   if (!name || !title) return res.status(400).json({ error: 'Ism va lavozimni kiriting' });
 
   const id = 'stf-' + crypto.randomUUID().slice(0, 8);
   const inviteCode = 'STF-' + Math.floor(1000 + Math.random() * 9000);
   db.prepare(`
-    INSERT INTO staff (id, business_id, name, title, phone, avatar_url, invite_code)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, biz.id, name, title, phone || '', avatar_url || '', inviteCode);
+    INSERT INTO staff (id, business_id, name, title, phone, avatar_url, invite_code, experience_years, rating, bio)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    biz.id,
+    name,
+    title,
+    phone || '',
+    avatar_url || '',
+    inviteCode,
+    experience_years !== undefined ? Number(experience_years) : 5,
+    rating !== undefined ? Number(rating) : 5.0,
+    bio || null
+  );
 
   if (Array.isArray(req.body.services)) {
     for (const s of req.body.services) {

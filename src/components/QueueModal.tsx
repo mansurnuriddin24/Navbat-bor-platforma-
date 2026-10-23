@@ -94,6 +94,20 @@ export const QueueModal: React.FC<QueueModalProps> = ({
       }
 
       setJoinedTicket(res);
+      try {
+        const selectedSrv = services.find((s) => s.id === selectedServiceId);
+        localStorage.setItem('navbatbor_offline_ticket', JSON.stringify({
+          type: 'QUEUE',
+          id: res.id,
+          number: res.queue_number,
+          business_name: business.name,
+          business_address: business.address,
+          service_name: selectedSrv?.name || res.service_name || '',
+          peopleAhead: res.peopleAhead,
+          estimatedWaitMinutes: res.estimatedWaitMinutes,
+          saved_at: new Date().toISOString()
+        }));
+      } catch (e) {}
       onSuccess(res);
     } catch (err: any) {
       setError(err.message || 'Xatolik yuz berdi');

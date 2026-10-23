@@ -131,15 +131,16 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
     setIsFlashing(true);
     setTimeout(() => setIsFlashing(false), 3500);
 
-    // Audio & Voice
-    if (soundEnabled && audioUnlocked) {
+    // Audio & Voice (Attempt play even if banner wasn't explicitly clicked, in case browser already unlocked audio)
+    if (soundEnabled) {
       playChime();
+      setAudioUnlocked(true);
       setTimeout(() => {
         const roomName = item.room_name || item.staff_name || '1-xona';
         speakUzbekAnnouncement(item.queue_number, roomName);
       }, 700);
     }
-  }, [soundEnabled, audioUnlocked, playChime, speakUzbekAnnouncement]);
+  }, [soundEnabled, playChime, speakUzbekAnnouncement]);
 
   // Unlock Audio on First User/Remote Click (Bypasses Smart TV autoplay policy)
   const unlockAudio = () => {
@@ -166,11 +167,12 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
       setIsConnected(true);
       setError(null);
 
-      // Check if newly called ticket arrived
+      // Check if newly called or recalled ticket arrived
       if (res.currentCalled && res.currentCalled.length > 0) {
         const topTicket = res.currentCalled[0];
-        if (topTicket.id !== lastAnnouncedTicketRef.current) {
-          lastAnnouncedTicketRef.current = topTicket.id;
+        const callSignature = `${topTicket.id}_${topTicket.called_at || ''}`;
+        if (callSignature !== lastAnnouncedTicketRef.current) {
+          lastAnnouncedTicketRef.current = callSignature;
           setLastAnnouncedId(topTicket.id);
           triggerCallAlert(topTicket);
         }
@@ -363,6 +365,21 @@ export const LiveQueueDisplay: React.FC<LiveQueueDisplayProps> = ({ token, onClo
 
           {/* Quick TV Control Buttons */}
           <div className="flex items-center gap-1 sm:gap-2">
+            <button
+              onClick={() => {
+                unlockAudio();
+                setSoundEnabled(true);
+                const sampleNumber = primaryCalled?.queue_number || 'A-001';
+                const sampleStaff = primaryCalled?.staff_name || primaryCalled?.room_name || 'Mutaxassis xonasi';
+                setTimeout(() => speakUzbekAnnouncement(sampleNumber, sampleStaff), 650);
+              }}
+              className="px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 text-[11px] sm:text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              title="Ovozli chaqiruvni tekshirish"
+            >
+              <BellRing className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden sm:inline">Ovoz testi</span>
+            </button>
+
             <button
               onClick={() => {
                 if (!audioUnlocked) unlockAudio();

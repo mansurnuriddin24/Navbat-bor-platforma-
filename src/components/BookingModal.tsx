@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, Clock, User, Check, AlertCircle, Sparkles, CheckCircle2, Send, Share2 } from 'lucide-react';
+import { X, Calendar, Clock, User, Check, AlertCircle, Sparkles, CheckCircle2, Send, Share2, Bell } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { api, setStoredToken } from '../api';
 import { Service, StaffMember, User as UserType } from '../types';
@@ -69,6 +69,35 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [tgSentMessage, setTgSentMessage] = useState<string | null>(null);
   const [customTgInput, setCustomTgInput] = useState<string>(currentUser?.telegram_chat_id || '');
   const [showTgInput, setShowTgInput] = useState<boolean>(false);
+  const [waitlistLoading, setWaitlistLoading] = useState<boolean>(false);
+  const [waitlistSuccess, setWaitlistSuccess] = useState<string | null>(null);
+
+  const handleJoinWaitlist = async () => {
+    const digitsOnly = customerPhone.replace(/\D/g, '');
+    if (!customerName.trim() || digitsOnly.length < 9) {
+      setErrorMessage('Kutish ro‘yxatiga yozilish uchun pastda Ism va Telefon raqamingizni kiriting.');
+      return;
+    }
+    const cleanPhone = '+998' + digitsOnly.slice(-9);
+    setWaitlistLoading(true);
+    setErrorMessage(null);
+    try {
+      const res = await api.joinWaitlist({
+        business_id: business.id,
+        service_id: selectedServiceId,
+        staff_id: selectedStaffId,
+        desired_date: selectedDate,
+        customer_name: customerName.trim(),
+        customer_phone: cleanPhone,
+        telegram_chat_id: currentUser?.telegram_chat_id,
+      });
+      setWaitlistSuccess(res.message || 'Kutish ro‘yxatiga qo‘shildingiz! Bo‘sh joy ochilsa xabar beramiz.');
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Kutish ro‘yxatiga yozilishda xatolik');
+    } finally {
+      setWaitlistLoading(false);
+    }
+  };
 
   const handleSendVoucherToTelegram = async () => {
     if (!bookedResult) return;
@@ -216,6 +245,21 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
       setBookedResult(res.booking);
       setBookingMeta(res);
+      try {
+        localStorage.setItem('navbatbor_offline_ticket', JSON.stringify({
+          type: 'BOOKING',
+          id: res.booking.id,
+          number: res.booking.booking_number,
+          business_name: business.name,
+          business_address: business.address,
+          service_name: selectedService?.name || '',
+          staff_name: selectedStaffMember?.name || '',
+          date: res.booking.booking_date,
+          time: `${res.booking.start_time} - ${res.booking.end_time}`,
+          price_uzs: res.booking.total_price_uzs,
+          saved_at: new Date().toISOString()
+        }));
+      } catch (e) {}
       onSuccess(res.booking);
     } catch (err: any) {
       const msg = err.message || '';
@@ -490,6 +534,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-slate-900 text-xs truncate">{st.name}</div>
                       <div className="text-[10px] text-slate-500 truncate">{st.title}</div>
+                      <div className="text-[10px] text-amber-600 font-semibold mt-0.5 flex items-center gap-1">
+                        <span>⭐️ {st.rating ? Number(st.rating).toFixed(1) : '5.0'}</span>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-500">{st.experience_years || 5} yil tajriba</span>
+                      </div>
                       {(() => {
                         const stCustomPrice = st.custom_prices?.[selectedServiceId] || st.services?.find((ss: any) => ss.service_id === selectedServiceId)?.custom_price_uzs;
                         const stEffectivePrice = stCustomPrice && Number(stCustomPrice) > 0 ? Number(stCustomPrice) : Number(selectedService?.price_uzs || 0);
@@ -546,24 +595,61 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       </button>
                     </div>
                   )}
+                  <div className="pt-2 border-t border-amber-200/60">
+                    {waitlistSuccess ? (
+                      <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                        ✅ {waitlistSuccess}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        id="join-waitlist-empty-btn"
+                        onClick={handleJoinWaitlist}
+                        disabled={waitlistLoading}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[11px] font-bold transition cursor-pointer"
+                      >
+                        <Bell className="w-3.5 h-3.5 text-amber-600" />
+                        <span>{waitlistLoading ? t('loading') : '🔔 Bo‘sh joy ochilsa xabar berish (Kutish ro‘yxati)'}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-4 gap-2 max-h-36 overflow-y-auto p-1">
-                  {availableSlots.map((slot) => (
-                    <button
-                      key={slot}
-                      type="button"
-                      id={`slot-btn-${slot.replace(':', '-')}`}
-                      onClick={() => setSelectedTime(slot)}
-                      className={`py-2 px-1 text-center rounded-lg text-xs font-semibold transition cursor-pointer ${
-                        selectedTime === slot
-                          ? 'bg-blue-600 text-white shadow-xs'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
-                      }`}
-                    >
-                      {slot}
-                    </button>
-                  ))}
+                <div className="space-y-2">
+                  <div className="grid grid-cols-4 gap-2 max-h-36 overflow-y-auto p-1">
+                    {availableSlots.map((slot) => (
+                      <button
+                        key={slot}
+                        type="button"
+                        id={`slot-btn-${slot.replace(':', '-')}`}
+                        onClick={() => setSelectedTime(slot)}
+                        className={`py-2 px-1 text-center rounded-lg text-xs font-semibold transition cursor-pointer ${
+                          selectedTime === slot
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                        }`}
+                      >
+                        {slot}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-1 px-1">
+                    <span className="text-[11px] text-slate-500">Kerakli soat bandmi?</span>
+                    {waitlistSuccess ? (
+                      <span className="text-[11px] font-bold text-emerald-600">✅ Kutish ro‘yxatidasiz</span>
+                    ) : (
+                      <button
+                        type="button"
+                        id="join-waitlist-inline-btn"
+                        onClick={handleJoinWaitlist}
+                        disabled={waitlistLoading}
+                        className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                      >
+                        <Bell className="w-3 h-3" />
+                        <span>Bo‘sh joy ochilsa xabar berish</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

@@ -813,7 +813,16 @@ NavbatBor yagona platformasi bilan integratsiya orqali siz real vaqtda jonli ele
                   <div className="min-w-0">
                     <h3 className="font-bold text-slate-900 text-xs truncate">{st.name}</h3>
                     <p className="text-[11px] text-slate-500 truncate">{st.title || 'Mutaxassis'}</p>
-                    <span className="text-[10px] text-emerald-700 font-semibold">● Qabulga ochiq</span>
+                    <div className="flex items-center gap-1.5 mt-0.5 text-[10px]">
+                      <span className="font-bold text-amber-600">⭐️ {st.rating ? Number(st.rating).toFixed(1) : '5.0'}</span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-slate-600 font-medium">{st.experience_years || 5} yil tajriba</span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-emerald-700 font-semibold">● Qabulga ochiq</span>
+                    </div>
+                    {st.bio && (
+                      <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">{st.bio}</p>
+                    )}
                   </div>
                 </div>
 

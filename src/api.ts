@@ -131,6 +131,16 @@ export const api = {
 
   // Booking
   createBooking: (data: any) => request<any>('/api/bookings', { method: 'POST', body: JSON.stringify(data) }),
+  joinWaitlist: (data: {
+    business_id: string;
+    service_id?: string;
+    staff_id?: string;
+    desired_date: string;
+    customer_name?: string;
+    customer_phone: string;
+    telegram_chat_id?: string;
+  }) => request<{ success: boolean; id: string; telegramLinked?: boolean; botUrl?: string; message: string }>('/api/waitlist', { method: 'POST', body: JSON.stringify(data) }),
+  sendDailyBusinessReport: () => request<{ success: boolean; message: string }>('/api/business/send-daily-report', { method: 'POST' }),
   getCustomerBookings: (status?: string) => request<any[]>(`/api/customer/bookings${status ? `?status=${status}` : ''}`),
   cancelBooking: (id: string, reason?: string) => request<any>(`/api/customer/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
   rescheduleBooking: (id: string, date: string, time: string) =>

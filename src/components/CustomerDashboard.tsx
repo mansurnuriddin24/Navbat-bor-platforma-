@@ -75,6 +75,26 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   // Notifications modal
   const [notificationsModalOpen, setNotificationsModalOpen] = useState<boolean>(false);
 
+  // Offline cached ticket & PWA install prompt
+  const [offlineTicket, setOfflineTicket] = useState<any | null>(() => {
+    try {
+      const raw = localStorage.getItem('navbatbor_offline_ticket');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [deferredPwaPrompt, setDeferredPwaPrompt] = useState<any | null>(null);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPwaPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
   // Synchronize when initialTab prop changes
   useEffect(() => {
     if (initialTab) {
@@ -356,6 +376,22 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto">
+          {deferredPwaPrompt && (
+            <button
+              id="customer-install-pwa-btn"
+              onClick={async () => {
+                try {
+                  deferredPwaPrompt.prompt();
+                  await deferredPwaPrompt.userChoice;
+                  setDeferredPwaPrompt(null);
+                } catch {}
+              }}
+              className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer min-h-[40px]"
+            >
+              <Smartphone className="w-4 h-4" />
+              <span>📲 Ilovani o‘rnatish</span>
+            </button>
+          )}
           {/* Notifications Trigger */}
           <button
             id="customer-notifications-btn"
@@ -385,6 +421,38 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       </div>
 
       {/* Tabs Bar: Exactly 5 items (Bronlarim, Jonli navbatim, Saqlanganlar, Bronlar tarixi, Profilim) */}
+      {offlineTicket && (
+        <div className="mb-5 p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-slate-700 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3.5">
+            <div className="px-3.5 py-2 rounded-xl bg-amber-400 text-slate-950 font-mono font-black text-lg shrink-0">
+              {offlineTicket.number}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                  📲 Offline saqlangan chipta
+                </span>
+                <span className="text-xs font-bold text-white">{offlineTicket.business_name}</span>
+              </div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                {offlineTicket.service_name} {offlineTicket.date ? `• ${offlineTicket.date} (${offlineTicket.time})` : ''}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                localStorage.removeItem('navbatbor_offline_ticket');
+              } catch {}
+              setOfflineTicket(null);
+            }}
+            className="text-[11px] text-slate-400 hover:text-white self-end sm:self-center px-2 py-1 rounded-lg hover:bg-white/10 transition cursor-pointer"
+          >
+            Yopish ✕
+          </button>
+        </div>
+      )}
       <div 
         role="tablist"
         aria-label="Mijoz bo‘limlari"

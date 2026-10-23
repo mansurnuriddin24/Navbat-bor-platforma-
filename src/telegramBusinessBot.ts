@@ -1046,18 +1046,65 @@ export function getBusinessDailyStats(db: DatabaseSync, businessId: string) {
     WHERE business_id = ? AND booking_date = date('now', '+5 hours')
   `).get(businessId) as any)?.c || 0;
 
-  const revenueEstimate = (db.prepare(`
+  const cancelledToday = (db.prepare(`
+    SELECT count(*) as c FROM queue_entries
+    WHERE business_id = ? AND status IN ('CANCELLED', 'NO_SHOW')
+      AND (date(joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(joined_at) >= datetime('now', '-18 hours'))
+  `).get(businessId) as any)?.c || 0;
+
+  const bookingRevenue = (db.prepare(`
     SELECT COALESCE(SUM(b.total_price_uzs), 0) as s
     FROM bookings b
     WHERE b.business_id = ? AND b.booking_date = date('now', '+5 hours') AND b.status = 'COMPLETED'
   `).get(businessId) as any)?.s || 0;
+
+  const queueRevenue = (db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(ss.custom_price_uzs, s.price_uzs, 0)), 0) as s
+    FROM queue_entries q
+    LEFT JOIN services s ON q.service_id = s.id
+    LEFT JOIN staff_services ss ON (q.staff_id = ss.staff_id AND q.service_id = ss.service_id)
+    WHERE q.business_id = ? AND q.status = 'COMPLETED'
+      AND q.id NOT LIKE 'qe-bkg-%'
+      AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+  `).get(businessId) as any)?.s || 0;
+
+  const revenueEstimate = Number(bookingRevenue) + Number(queueRevenue);
+
+  const staffList = db.prepare('SELECT id, name, title FROM staff WHERE business_id = ? AND is_active = 1 ORDER BY name ASC').all(businessId) as any[];
+  const staffBreakdown = staffList.map((st) => {
+    const qStat = db.prepare(`
+      SELECT count(*) as c, COALESCE(SUM(COALESCE(ss.custom_price_uzs, s.price_uzs, 0)), 0) as rev
+      FROM queue_entries q
+      LEFT JOIN services s ON q.service_id = s.id
+      LEFT JOIN staff_services ss ON (q.staff_id = ss.staff_id AND q.service_id = ss.service_id)
+      WHERE q.business_id = ? AND q.staff_id = ? AND q.status = 'COMPLETED'
+        AND q.id NOT LIKE 'qe-bkg-%'
+        AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+    `).get(businessId, st.id) as any;
+
+    const bStat = db.prepare(`
+      SELECT count(*) as c, COALESCE(SUM(b.total_price_uzs), 0) as rev
+      FROM bookings b
+      WHERE b.business_id = ? AND b.staff_id = ? AND b.booking_date = date('now', '+5 hours') AND b.status = 'COMPLETED'
+    `).get(businessId, st.id) as any;
+
+    return {
+      id: st.id,
+      name: st.name,
+      title: st.title,
+      servedCount: Number(qStat?.c || 0) + Number(bStat?.c || 0),
+      revenue: Number(qStat?.rev || 0) + Number(bStat?.rev || 0)
+    };
+  });
 
   return {
     waitingCount,
     servingCount,
     completedToday,
     bookingsToday,
-    revenueEstimate
+    cancelledToday,
+    revenueEstimate,
+    staffBreakdown
   };
 }
 
@@ -2814,15 +2861,24 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         return;
       }
       const stats = getBusinessDailyStats(db, biz.id);
+      let staffSection = '';
+      if (stats.staffBreakdown && stats.staffBreakdown.length > 0) {
+        staffSection = `\n👨‍⚕️ <b>Mutaxassislar kesimida:</b>\n`;
+        stats.staffBreakdown.forEach((st: any, idx: number) => {
+          staffSection += `${idx + 1}. <b>${st.name}</b>: ${st.servedCount} mijoz (${Number(st.revenue).toLocaleString()} so‘m)\n`;
+        });
+      }
       await sendBusinessBotMessage(
         chatId,
-        `📊 <b>BUGUNGI HISOBOT — ${biz.name}</b>\n` +
+        `📊 <b>BUGUNGI MOLIYAVIY HISOBOT — ${biz.name}</b>\n` +
         `━━━━━━━━━━━━━━━━\n` +
-        `✅ <b>Yakunlangan xizmatlar:</b> <b>${stats.completedToday} nafar</b>\n` +
-        `⏳ <b>Navbatda kutayotgan:</b> <b>${stats.waitingCount} nafar</b>\n` +
+        `✅ <b>Xizmat ko‘rsatildi:</b> <b>${stats.completedToday} nafar</b>\n` +
+        `⏳ <b>Navbatda kutmoqda:</b> <b>${stats.waitingCount} nafar</b>\n` +
         `🟢 <b>Hozir qabulda:</b> <b>${stats.servingCount} nafar</b>\n` +
-        `📅 <b>Bugungi qabul bronlari:</b> <b>${stats.bookingsToday} ta</b>\n` +
-        `💰 <b>Kassa tushumi (taxminiy):</b> <b>${stats.revenueEstimate.toLocaleString()} so‘m</b>\n` +
+        `📅 <b>Bugungi bronlar:</b> <b>${stats.bookingsToday} ta</b>\n` +
+        `❌ <b>Bekor qilingan / Kelmadi:</b> <b>${stats.cancelledToday || 0} ta</b>\n` +
+        `💰 <b>Jami kassa tushumi:</b> <b>${stats.revenueEstimate.toLocaleString()} so‘m</b>` +
+        staffSection +
         `━━━━━━━━━━━━━━━━\n` +
         `<i>Ma’lumotlar bazadan real vaqtda yangilanadi.</i>`,
         {

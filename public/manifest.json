@@ -1,0 +1,24 @@
+{
+  "name": "NavbatBor — Online Navbat va Bronlash",
+  "short_name": "NavbatBor",
+  "description": "O'zbekistonda professional online booking va jonli elektron navbat platformasi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/navbatbor-logo.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

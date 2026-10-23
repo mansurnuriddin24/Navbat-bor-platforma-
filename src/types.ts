@@ -110,6 +110,9 @@ export interface StaffMember {
   telegram_chat_id?: string;
   telegram_user_id?: string;
   is_active?: number;
+  experience_years?: number;
+  rating?: number;
+  bio?: string;
   services?: Array<{
     service_id: string;
     custom_price_uzs?: number | null;

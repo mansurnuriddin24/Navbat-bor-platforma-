@@ -444,7 +444,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-blue-700 text-xs">
-                        {Number(s.price_uzs).toLocaleString('uz-UZ')} UZS
+                        {(() => {
+                          const stCustomPrice = selectedStaffMember?.custom_prices?.[s.id] || selectedStaffMember?.services?.find((ss: any) => ss.service_id === s.id)?.custom_price_uzs;
+                          const displayPrice = stCustomPrice && Number(stCustomPrice) > 0 ? Number(stCustomPrice) : Number(s.price_uzs);
+                          return `${displayPrice.toLocaleString('uz-UZ')} UZS`;
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -483,9 +487,18 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                         </div>
                       )}
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="font-semibold text-slate-900 text-xs truncate">{st.name}</div>
                       <div className="text-[10px] text-slate-500 truncate">{st.title}</div>
+                      {(() => {
+                        const stCustomPrice = st.custom_prices?.[selectedServiceId] || st.services?.find((ss: any) => ss.service_id === selectedServiceId)?.custom_price_uzs;
+                        const stEffectivePrice = stCustomPrice && Number(stCustomPrice) > 0 ? Number(stCustomPrice) : Number(selectedService?.price_uzs || 0);
+                        return stEffectivePrice > 0 ? (
+                          <div className="text-[10px] font-bold text-emerald-600 mt-0.5">
+                            {stEffectivePrice.toLocaleString('uz-UZ')} UZS
+                          </div>
+                        ) : null;
+                      })()}
                     </div>
                   </div>
                 ))}

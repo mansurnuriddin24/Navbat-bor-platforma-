@@ -106,6 +106,17 @@ export interface StaffMember {
   phone?: string;
   avatar_url?: string;
   service_ids?: string;
+  invite_code?: string;
+  telegram_chat_id?: string;
+  telegram_user_id?: string;
+  is_active?: number;
+  services?: Array<{
+    service_id: string;
+    custom_price_uzs?: number | null;
+    service_name?: string;
+    base_price?: number;
+  }>;
+  custom_prices?: Record<string, number>;
 }
 
 export interface BusinessHours {

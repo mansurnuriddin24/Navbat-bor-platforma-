@@ -145,6 +145,8 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
   const [newStaffName, setNewStaffName] = useState<string>('');
   const [newStaffTitle, setNewStaffTitle] = useState<string>('');
   const [newStaffPhone, setNewStaffPhone] = useState<string>('+998');
+  const [editingStaffPricing, setEditingStaffPricing] = useState<StaffMember | null>(null);
+  const [staffCustomPrices, setStaffCustomPrices] = useState<Record<string, { enabled: boolean; price: string }>>({});
 
   const [showQRModal, setShowQRModal] = useState<boolean>(false);
   const [showWalkInModal, setShowWalkInModal] = useState<boolean>(false);
@@ -829,10 +831,10 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
     );
   }
 
-  const daysLeft = subData?.daysLeft ?? 0;
-  const isTrial = Boolean(subData?.isTrial || (business?.is_trial && !subData?.isExpired && daysLeft > 0));
-  const isExpiringSoon = daysLeft <= 3 && daysLeft > 0;
-  const isExpired = Boolean(subData?.isExpired || subData?.business?.subscription_status === 'EXPIRED' || (daysLeft <= 0 && business?.subscription_expires_at));
+  const daysLeft = subData ? (subData.daysLeft ?? 0) : 14;
+  const isTrial = Boolean(subData ? (subData.isTrial || (business?.is_trial && !subData.isExpired && daysLeft > 0)) : business?.is_trial);
+  const isExpiringSoon = Boolean(subData) && daysLeft <= 3 && daysLeft > 0;
+  const isExpired = Boolean(subData) && Boolean(subData.isExpired || subData.business?.subscription_status === 'EXPIRED' || (daysLeft <= 0 && business?.subscription_expires_at));
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
@@ -2036,31 +2038,194 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {staff.map((st) => (
-              <div key={st.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex items-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
-                  {st.avatar_url ? (
-                    <img
-                      src={st.avatar_url}
-                      alt={st.name}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                      }}
-                    />
-                  ) : null}
-                  <div className="w-full h-full flex items-center justify-center font-bold text-slate-600">
-                    {st.name[0]}
+            {staff.map((st, idx) => {
+              const inviteCode = st.invite_code || `STF-${1001 + idx}`;
+              const botLink = `https://t.me/navbatbor_bizness_bot?start=staff_${inviteCode}`;
+              const isLinked = Boolean(st.telegram_chat_id || st.telegram_user_id);
+              return (
+                <div key={st.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between gap-4">
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                      {st.avatar_url ? (
+                        <img
+                          src={st.avatar_url}
+                          alt={st.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      ) : null}
+                      <div className="w-full h-full flex items-center justify-center font-bold text-slate-600">
+                        {st.name[0]}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-bold text-slate-900 text-sm truncate">{st.name}</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          isLinked ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {isLinked ? 'Botga ulangan' : 'Botga kirmagan'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500">{st.title}</p>
+                      <p className="text-[11px] text-slate-400 mt-1 font-mono">{st.phone || 'Telefon kiritilmagan'}</p>
+                    </div>
                   </div>
+
+                  {/* Invite Code & Bot Login Link */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-500 font-semibold">🔑 Mutaxassis kodi:</span>
+                      <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                        {inviteCode}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(botLink);
+                        showToast(`${st.name} uchun botga kirish havolasi nusxalandi!`, 'success');
+                      }}
+                      className="w-full py-1.5 px-2.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>📋 Telegram kirish havolasini nusxalash</span>
+                    </button>
+                  </div>
+
+                  {/* Assigned Services & Custom Prices Summary */}
+                  {st.services && st.services.length > 0 && (
+                    <div className="space-y-1 border-t border-slate-100 pt-2.5">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Yo‘nalish va narxlari:</div>
+                      {st.services.map((ss: any) => (
+                        <div key={ss.service_id} className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-600 truncate pr-2">{ss.service_name}</span>
+                          <span className="font-bold text-slate-900 shrink-0">
+                            {Number(ss.custom_price_uzs || ss.base_price || 0).toLocaleString()} UZS
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Button to open Specialist Custom Pricing Modal */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const initMap: Record<string, { enabled: boolean; price: string }> = {};
+                      services.forEach((srv) => {
+                        const assigned = st.services?.find((ss: any) => ss.service_id === srv.id);
+                        initMap[srv.id] = {
+                          enabled: Boolean(assigned || !st.services || st.services.length === 0),
+                          price: assigned?.custom_price_uzs ? String(assigned.custom_price_uzs) : String(srv.price_uzs)
+                        };
+                      });
+                      setStaffCustomPrices(initMap);
+                      setEditingStaffPricing(st);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>💰 Xizmat va shaxsiy narxlarni sozlash</span>
+                  </button>
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">{st.name}</h3>
-                  <p className="text-xs text-slate-500">{st.title}</p>
-                  <p className="text-[11px] text-slate-400 mt-1 font-mono">{st.phone || 'Telefon kiritilmagan'}</p>
+              );
+            })}
+          </div>
+
+          {editingStaffPricing && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+                <h3 className="text-base font-bold text-slate-900 mb-1">
+                  {editingStaffPricing.name} — Xizmat va Narxlar
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">
+                  Ushbu mutaxassis ko‘rsatadigan xizmatlarni belgilang va uning malakasiga mos shaxsiy narx kiriting:
+                </p>
+
+                <div className="space-y-3 mb-5">
+                  {services.map((srv) => {
+                    const stState = staffCustomPrices[srv.id] || { enabled: false, price: String(srv.price_uzs) };
+                    return (
+                      <div
+                        key={srv.id}
+                        className={`p-3 rounded-xl border transition ${
+                          stState.enabled ? 'border-indigo-500 bg-indigo-50/20' : 'border-slate-200 bg-slate-50/50 opacity-70'
+                        }`}
+                      >
+                        <label className="flex items-center gap-2.5 cursor-pointer mb-2">
+                          <input
+                            type="checkbox"
+                            checked={stState.enabled}
+                            onChange={(e) => {
+                              setStaffCustomPrices((prev) => ({
+                                ...prev,
+                                [srv.id]: { ...stState, enabled: e.target.checked }
+                              }));
+                            }}
+                            className="w-4 h-4 rounded text-indigo-600"
+                          />
+                          <span className="font-bold text-slate-900 text-xs flex-1">{srv.name}</span>
+                          <span className="text-[10px] text-slate-400">Standart: {Number(srv.price_uzs).toLocaleString()} so‘m</span>
+                        </label>
+
+                        {stState.enabled && (
+                          <div className="flex items-center gap-2 pl-6">
+                            <span className="text-[11px] text-slate-600 font-medium">Mutaxassis narxi (UZS):</span>
+                            <input
+                              type="number"
+                              value={stState.price}
+                              onChange={(e) => {
+                                setStaffCustomPrices((prev) => ({
+                                  ...prev,
+                                  [srv.id]: { ...stState, price: e.target.value }
+                                }));
+                              }}
+                              className="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white"
+                              placeholder={String(srv.price_uzs)}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingStaffPricing(null)}
+                    className="flex-1 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
+                  >
+                    Bekor qilish
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const payload = Object.entries(staffCustomPrices)
+                          .filter(([_, val]) => (val as any).enabled)
+                          .map(([service_id, val]) => ({
+                            service_id,
+                            custom_price_uzs: Number((val as any).price) || null
+                          }));
+                        await api.updateStaffServices(editingStaffPricing.id, payload);
+                        const updatedStaff = await api.getBusinessStaff();
+                        setStaff(updatedStaff);
+                        setEditingStaffPricing(null);
+                        showToast('Mutaxassis xizmatlari va narxlari saqlandi!', 'success');
+                      } catch (err: any) {
+                        showToast(err.message || 'Xatolik yuz berdi', 'error');
+                      }
+                    }}
+                    className="flex-1 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer"
+                  >
+                    Saqlash
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
 
           {showAddStaff && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">

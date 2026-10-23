@@ -309,6 +309,32 @@ try { db.exec(`ALTER TABLE businesses ADD COLUMN telegram_user_id TEXT;`); } cat
 try { db.exec(`ALTER TABLE staff ADD COLUMN telegram_chat_id TEXT;`); } catch(e){}
 try { db.exec(`ALTER TABLE staff ADD COLUMN telegram_user_id TEXT;`); } catch(e){}
 try { db.exec(`ALTER TABLE staff ADD COLUMN role TEXT DEFAULT 'EMPLOYEE';`); } catch(e){}
+try { db.exec(`ALTER TABLE staff ADD COLUMN invite_code TEXT;`); } catch(e){}
+try { db.exec(`ALTER TABLE staff_services ADD COLUMN custom_price_uzs INTEGER;`); } catch(e){}
+
+// Auto-generate invite_code for any staff member missing one
+try {
+  const staffNeedingCodes = db.prepare("SELECT id, name FROM staff WHERE invite_code IS NULL OR invite_code = ''").all() as any[];
+  for (let idx = 0; idx < staffNeedingCodes.length; idx++) {
+    const s = staffNeedingCodes[idx];
+    const code = 'STF-' + (1001 + idx);
+    db.prepare('UPDATE staff SET invite_code = ? WHERE id = ?').run(code, s.id);
+  }
+} catch(e){}
+
+// Ensure super admin Telegram ID link is synced
+try {
+  const superAdminEnv = process.env.SUPER_ADMIN_TELEGRAM_IDS || process.env.TELEGRAM_ADMIN_CHAT_ID || '5564730141';
+  const superId = superAdminEnv.split(',')[0].trim();
+  if (superId) {
+    db.prepare(`
+      UPDATE users 
+      SET telegram_chat_id = ?, telegram_user_id = ? 
+      WHERE (id = 'usr-admin' OR role IN ('SUPER_ADMIN', 'ADMIN'))
+        AND (telegram_chat_id IS NULL OR telegram_chat_id = '')
+    `).run(superId, superId);
+  }
+} catch(e){}
 try { db.exec(`ALTER TABLE users ADD COLUMN assigned_district TEXT;`); } catch(e){}
 try { db.exec(`ALTER TABLE bookings ADD COLUMN source TEXT DEFAULT 'WEBSITE';`); } catch(e){}
 try { db.exec(`ALTER TABLE bookings ADD COLUMN created_by_user_id TEXT;`); } catch(e){}
@@ -1310,11 +1336,14 @@ function checkSubscriptionAlerts() {
     const todayStr = new Date().toISOString().slice(0, 10);
 
     for (const biz of businesses) {
-      const daysLeft = Math.ceil(biz.days_left);
+      const expiryMs = new Date(biz.subscription_expires_at).getTime();
+      const nowMs = Date.now();
+      const msLeft = expiryMs - nowMs;
+      const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
       const targetChatId = biz.telegram_chat_id || biz.user_telegram_id;
-      const isTrial = Boolean(biz.is_trial) || biz.subscription_status === 'TRIAL';
+      const isTrial = Boolean(biz.is_trial) || biz.subscription_status === 'TRIAL' || biz.subscription_plan_code === 'FREE';
 
-      if (daysLeft <= 0) {
+      if (msLeft <= 0) {
         // Expired - preserve all business data intact!
         db.prepare("UPDATE businesses SET subscription_status = 'EXPIRED', is_trial = 0 WHERE id = ?").run(biz.id);
         
@@ -2992,7 +3021,25 @@ app.get('/api/businesses/:slug', (req, res) => {
     LEFT JOIN staff_services ss ON s.id = ss.staff_id
     WHERE s.business_id = ? AND s.is_active = 1
     GROUP BY s.id
-  `).all(business.id);
+  `).all(business.id) as any[];
+
+  for (const st of staff) {
+    try {
+      const staffSvcs = db.prepare(`
+        SELECT ss.service_id, ss.custom_price_uzs, s.name as service_name, s.price_uzs as base_price
+        FROM staff_services ss
+        JOIN services s ON ss.service_id = s.id
+        WHERE ss.staff_id = ?
+      `).all(st.id) as any[];
+      st.services = staffSvcs;
+      st.custom_prices = {};
+      for (const ss of staffSvcs) {
+        if (ss.custom_price_uzs && Number(ss.custom_price_uzs) > 0) {
+          st.custom_prices[ss.service_id] = Number(ss.custom_price_uzs);
+        }
+      }
+    } catch(e) {}
+  }
 
   const hours = db.prepare('SELECT * FROM business_hours WHERE business_id = ? ORDER BY day_of_week ASC').all(business.id);
   const reviews = db.prepare(`
@@ -4866,6 +4913,7 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
   // 5. Database Transaction with Immediate Lock & Conflict Verification
   const bookingId = 'bkg-' + crypto.randomUUID().slice(0, 8);
   const bookingNumber = 'NB-' + Math.floor(1000 + Math.random() * 9000);
+  let finalPrice = service.price_uzs;
 
   db.exec('BEGIN IMMEDIATE;');
   try {
@@ -4888,6 +4936,14 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
       };
     }
 
+    finalPrice = service.price_uzs;
+    try {
+      const customPriceRow = db.prepare('SELECT custom_price_uzs FROM staff_services WHERE staff_id = ? AND service_id = ?').get(staff_id, service_id);
+      if (customPriceRow && customPriceRow.custom_price_uzs && Number(customPriceRow.custom_price_uzs) > 0) {
+        finalPrice = Number(customPriceRow.custom_price_uzs);
+      }
+    } catch (e) {}
+
     db.prepare(`
       INSERT INTO bookings (
         id, booking_number, business_id, service_id, staff_id, customer_id, 
@@ -4906,7 +4962,7 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
       booking_date,
       start_time,
       endTime,
-      service.price_uzs,
+      finalPrice,
       source,
       finalCreatorId,
       idempotency_key || null,
@@ -4974,7 +5030,7 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
         booking_date,
         start_time,
         end_time: endTime,
-        total_price_uzs: service.price_uzs,
+        total_price_uzs: finalPrice,
         status: 'CONFIRMED',
         source
       },
@@ -6278,6 +6334,7 @@ app.post('/api/business/walk-in', requireAuth, async (req, res) => {
     const endTime = validation.endTime;
     const bookingId = 'bkg-' + crypto.randomUUID().slice(0, 8);
     const bookingNumber = 'NB-' + Math.floor(1000 + Math.random() * 9000);
+    let finalPrice = validation.service.price_uzs;
 
     db.exec('BEGIN IMMEDIATE;');
     try {
@@ -6441,8 +6498,8 @@ app.get('/api/customer/bookings', requireAuth, (req, res) => {
       'BOOKING' as entry_type
     FROM bookings b
     JOIN businesses biz ON b.business_id = biz.id
-    JOIN services s ON b.service_id = s.id
-    JOIN staff st ON b.staff_id = st.id
+    LEFT JOIN services s ON b.service_id = s.id
+    LEFT JOIN staff st ON b.staff_id = st.id
     LEFT JOIN reviews r ON b.id = r.booking_id
     WHERE (
       b.customer_id = ?
@@ -7068,8 +7125,88 @@ app.get('/api/business/staff', requireAuth, (req, res) => {
   const biz = getUserBusiness(user.id);
   if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
 
-  const staff = db.prepare('SELECT * FROM staff WHERE business_id = ?').all(biz.id);
-  res.json(staff);
+  const staffList = db.prepare('SELECT * FROM staff WHERE business_id = ? ORDER BY is_active DESC, name ASC').all(biz.id) as any[];
+  for (const st of staffList) {
+    try {
+      const staffSvcs = db.prepare(`
+        SELECT ss.service_id, ss.custom_price_uzs, s.name as service_name, s.price_uzs as base_price
+        FROM staff_services ss
+        JOIN services s ON ss.service_id = s.id
+        WHERE ss.staff_id = ?
+      `).all(st.id) as any[];
+      st.services = staffSvcs;
+      st.custom_prices = {};
+      for (const ss of staffSvcs) {
+        if (ss.custom_price_uzs && Number(ss.custom_price_uzs) > 0) {
+          st.custom_prices[ss.service_id] = Number(ss.custom_price_uzs);
+        }
+      }
+      st.service_ids = staffSvcs.map(s => s.service_id).join(',');
+    } catch(e) {}
+  }
+  res.json(staffList);
+});
+
+// Update staff details
+app.put('/api/business/staff/:id', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const biz = getUserBusiness(user.id);
+  if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
+
+  const { id } = req.params;
+  const { name, title, phone, is_active } = req.body;
+
+  const staffRow = db.prepare('SELECT * FROM staff WHERE id = ? AND business_id = ?').get(id, biz.id) as any;
+  if (!staffRow) return res.status(404).json({ error: 'Xodim topilmadi' });
+
+  db.prepare(`
+    UPDATE staff 
+    SET name = COALESCE(?, name),
+        title = COALESCE(?, title),
+        phone = COALESCE(?, phone),
+        is_active = COALESCE(?, is_active)
+    WHERE id = ? AND business_id = ?
+  `).run(name || null, title || null, phone || null, is_active !== undefined ? (is_active ? 1 : 0) : null, id, biz.id);
+
+  res.json({ success: true, message: 'Xodim ma’lumotlari yangilandi' });
+});
+
+// Delete staff
+app.delete('/api/business/staff/:id', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const biz = getUserBusiness(user.id);
+  if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
+
+  const { id } = req.params;
+  db.prepare('DELETE FROM staff_services WHERE staff_id = ?').run(id);
+  db.prepare('DELETE FROM staff WHERE id = ? AND business_id = ?').run(id, biz.id);
+
+  res.json({ success: true, message: 'Xodim muvaffaqiyatli o‘chirildi' });
+});
+
+// Set custom prices and services for staff
+app.post('/api/business/staff/:id/services', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const biz = getUserBusiness(user.id);
+  if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
+
+  const { id } = req.params;
+  const { services } = req.body; // array of { service_id, custom_price_uzs }
+
+  const staffRow = db.prepare('SELECT * FROM staff WHERE id = ? AND business_id = ?').get(id, biz.id) as any;
+  if (!staffRow) return res.status(404).json({ error: 'Xodim topilmadi' });
+
+  if (Array.isArray(services)) {
+    db.prepare('DELETE FROM staff_services WHERE staff_id = ?').run(id);
+    for (const item of services) {
+      if (item.service_id) {
+        const customPrice = item.custom_price_uzs && Number(item.custom_price_uzs) > 0 ? Number(item.custom_price_uzs) : null;
+        db.prepare('INSERT INTO staff_services (staff_id, service_id, custom_price_uzs) VALUES (?, ?, ?)').run(id, item.service_id, customPrice);
+      }
+    }
+  }
+
+  res.json({ success: true, message: 'Xodim xizmatlari va narxlari saqlandi' });
 });
 
 app.post('/api/business/staff', requireAuth, (req, res) => {
@@ -7099,12 +7236,22 @@ app.post('/api/business/staff', requireAuth, (req, res) => {
   if (!name || !title) return res.status(400).json({ error: 'Ism va lavozimni kiriting' });
 
   const id = 'stf-' + crypto.randomUUID().slice(0, 8);
+  const inviteCode = 'STF-' + Math.floor(1000 + Math.random() * 9000);
   db.prepare(`
-    INSERT INTO staff (id, business_id, name, title, phone, avatar_url)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, biz.id, name, title, phone || '', avatar_url || '');
+    INSERT INTO staff (id, business_id, name, title, phone, avatar_url, invite_code)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, biz.id, name, title, phone || '', avatar_url || '', inviteCode);
 
-  res.status(201).json({ success: true, id });
+  if (Array.isArray(req.body.services)) {
+    for (const s of req.body.services) {
+      if (s.service_id) {
+        const cp = s.custom_price_uzs && Number(s.custom_price_uzs) > 0 ? Number(s.custom_price_uzs) : null;
+        db.prepare('INSERT OR REPLACE INTO staff_services (staff_id, service_id, custom_price_uzs) VALUES (?, ?, ?)').run(id, s.service_id, cp);
+      }
+    }
+  }
+
+  res.status(201).json({ success: true, id, invite_code: inviteCode });
 });
 
 // Business Onboarding (New Business Registration with full hours, services, and optional guest registration)

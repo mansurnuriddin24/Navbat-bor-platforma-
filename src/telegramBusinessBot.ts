@@ -407,6 +407,9 @@ export function initBusinessBotDatabase(db: DatabaseSync): void {
       processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  try { db.exec("ALTER TABLE staff ADD COLUMN invite_code TEXT;"); } catch(e) {}
+  try { db.exec("ALTER TABLE staff_services ADD COLUMN custom_price_uzs INTEGER;"); } catch(e) {}
 }
 
 // ========================================================
@@ -550,10 +553,35 @@ export function getBusinessBotUserAuth(db: DatabaseSync, telegramUserId: string,
   } catch (e) {}
 
   if (isSuperAdminEnv || superAdminDbUser) {
+    let bizForAdmin: any = null;
+    try {
+      const stateRow = db.prepare('SELECT state_data_json FROM business_bot_user_states WHERE chat_id = ?').get(cId) as any;
+      if (stateRow?.state_data_json) {
+        const parsed = JSON.parse(stateRow.state_data_json);
+        if (parsed.selected_business_id) {
+          bizForAdmin = db.prepare('SELECT * FROM businesses WHERE id = ? AND status IN (\'APPROVED\', \'ACTIVE\')').get(parsed.selected_business_id);
+        }
+      }
+      if (!bizForAdmin) {
+        bizForAdmin = db.prepare(`
+          SELECT b.*, u.id as owner_user_id, u.name as owner_name, u.phone as owner_phone, u.email as owner_email
+          FROM businesses b
+          JOIN users u ON b.owner_id = u.id
+          WHERE (b.telegram_chat_id = ? OR b.telegram_user_id = ? OR u.telegram_chat_id = ? OR u.telegram_user_id = ?)
+            AND b.status IN ('APPROVED', 'ACTIVE')
+          ORDER BY b.created_at DESC LIMIT 1
+        `).get(idStr, idStr, idStr, idStr);
+      }
+      if (!bizForAdmin) {
+        bizForAdmin = db.prepare("SELECT * FROM businesses WHERE status IN ('APPROVED', 'ACTIVE') ORDER BY created_at ASC LIMIT 1").get();
+      }
+    } catch(e) {}
+
     return {
       role: 'SUPER_ADMIN',
       user: superAdminDbUser || { id: 'usr-admin', name: 'Super Admin', role: 'SUPER_ADMIN' },
-      permissions: ['ALL', 'APPROVE_APPLICATIONS', 'REJECT_APPLICATIONS', 'VIEW_ALL_BUSINESSES', 'VIEW_STATS'],
+      business: bizForAdmin || undefined,
+      permissions: ['ALL', 'APPROVE_APPLICATIONS', 'REJECT_APPLICATIONS', 'VIEW_ALL_BUSINESSES', 'VIEW_STATS', 'CALL_NEXT_CUSTOMER', 'VIEW_QUEUE', 'ADD_WALKIN', 'VIEW_STATISTICS', 'VIEW_BOOKINGS', 'VIEW_CUSTOMERS', 'VIEW_SERVICES', 'VIEW_STAFF'],
       language
     };
   }
@@ -674,9 +702,11 @@ export function getGuestKeyboard(lang: BotLanguage, hasPending = false) {
   if (!hasPending) {
     keyboard.push([{ text: t(lang, 'btn_register') }]);
     keyboard.push([{ text: t(lang, 'btn_link_biz') }]);
+    keyboard.push([{ text: '🔑 Xodim / Mutaxassis kodi' }]);
   } else {
     keyboard.push([{ text: t(lang, 'btn_check_status') }]);
     keyboard.push([{ text: t(lang, 'btn_link_biz') }]);
+    keyboard.push([{ text: '🔑 Xodim / Mutaxassis kodi' }]);
   }
   keyboard.push([{ text: '🇺🇿 O‘zbekcha' }, { text: '🇷🇺 Русский' }]);
   keyboard.push([{ text: t(lang, 'btn_help') }]);
@@ -689,6 +719,19 @@ export function getGuestKeyboard(lang: BotLanguage, hasPending = false) {
 }
 
 export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBotRole) {
+  if (role === 'EMPLOYEE') {
+    return {
+      keyboard: [
+        [{ text: '🟢 KEYINGI MIJOZIMNI CHAQIRISH' }],
+        [{ text: '👤 Hozirgi mijozim' }, { text: '📋 Mening navbatim' }],
+        [{ text: '📅 Bugungi bronlarim' }, { text: '📊 Mening hisobotim' }],
+        [{ text: '🚪 Chiqish (Hisobdan uzish)' }]
+      ],
+      resize_keyboard: true,
+      is_persistent: true
+    };
+  }
+
   const keyboard: any[][] = [
     [{ text: t(lang, 'btn_menu_call_next') }],
     [{ text: t(lang, 'btn_menu_current') }, { text: t(lang, 'btn_menu_live_queue') }],
@@ -700,6 +743,9 @@ export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBo
     keyboard.push([
       { text: '📝 Kutayotgan arizalar' },
       { text: '👑 Super Admin Boshqaruvi' }
+    ]);
+    keyboard.push([
+      { text: '🏢 Biznesni almashtirish' }
     ]);
   }
 
@@ -1120,32 +1166,74 @@ export function executeCallNextCustomerInBot(
   db: DatabaseSync,
   businessId: string,
   actorUserId?: string,
-  actorTgId?: string
+  actorTgId?: string,
+  targetStaffId?: string
 ): { success: boolean; entry?: any; message: string; isBooking?: boolean } {
   db.exec('BEGIN IMMEDIATE;');
   try {
-    const nextWaiting = db.prepare(`
-      SELECT q.*, s.name as service_name
-      FROM queue_entries q
-      LEFT JOIN services s ON q.service_id = s.id
-      WHERE q.business_id = ? AND q.status = 'WAITING'
-        AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
-      ORDER BY q.joined_at ASC LIMIT 1
-    `).get(businessId) as any;
+    let nextWaiting: any = null;
+    if (targetStaffId) {
+      nextWaiting = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.status = 'WAITING'
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+          AND (
+            q.staff_id = ?
+            OR (
+              (q.staff_id IS NULL OR q.staff_id = '')
+              AND q.service_id IN (SELECT service_id FROM staff_services WHERE staff_id = ?)
+            )
+          )
+        ORDER BY q.joined_at ASC LIMIT 1
+      `).get(businessId, targetStaffId, targetStaffId) as any;
+    } else {
+      nextWaiting = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.status = 'WAITING'
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+        ORDER BY q.joined_at ASC LIMIT 1
+      `).get(businessId) as any;
+    }
 
     if (!nextWaiting) {
       // Check today's booked appointments (e.g. booked via website/dashboard/bot)
-      const nextBooking = db.prepare(`
-        SELECT b.*, s.name as service_name, st.name as staff_name
-        FROM bookings b
-        LEFT JOIN services s ON b.service_id = s.id
-        LEFT JOIN staff st ON b.staff_id = st.id
-        WHERE b.business_id = ?
-          AND b.booking_date = date('now', '+5 hours')
-          AND b.status IN ('CONFIRMED', 'PENDING')
-        ORDER BY b.start_time ASC
-        LIMIT 1
-      `).get(businessId) as any;
+      let nextBooking: any = null;
+      if (targetStaffId) {
+        nextBooking = db.prepare(`
+          SELECT b.*, s.name as service_name, st.name as staff_name
+          FROM bookings b
+          LEFT JOIN services s ON b.service_id = s.id
+          LEFT JOIN staff st ON b.staff_id = st.id
+          WHERE b.business_id = ?
+            AND b.booking_date = date('now', '+5 hours')
+            AND b.status IN ('CONFIRMED', 'PENDING')
+            AND (
+              b.staff_id = ?
+              OR (
+                (b.staff_id IS NULL OR b.staff_id = '')
+                AND b.service_id IN (SELECT service_id FROM staff_services WHERE staff_id = ?)
+              )
+            )
+          ORDER BY b.start_time ASC
+          LIMIT 1
+        `).get(businessId, targetStaffId, targetStaffId) as any;
+      } else {
+        nextBooking = db.prepare(`
+          SELECT b.*, s.name as service_name, st.name as staff_name
+          FROM bookings b
+          LEFT JOIN services s ON b.service_id = s.id
+          LEFT JOIN staff st ON b.staff_id = st.id
+          WHERE b.business_id = ?
+            AND b.booking_date = date('now', '+5 hours')
+            AND b.status IN ('CONFIRMED', 'PENDING')
+          ORDER BY b.start_time ASC
+          LIMIT 1
+        `).get(businessId) as any;
+      }
 
       if (!nextBooking) {
         db.exec('COMMIT;');
@@ -1760,6 +1848,120 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     }
   }
 
+  // 3a. Deep link login for staff/specialists via invite code or staff ID
+  if (text.startsWith('/start staff_') || text.startsWith('/start stf_') || text.startsWith('/start code_')) {
+    const rawCode = text.replace('/start staff_', '').replace('/start stf_', '').replace('/start code_', '').trim().toUpperCase();
+    const cleanCode = rawCode.replace(/[^A-Z0-9]/g, '');
+    const staffRow = db.prepare(`
+      SELECT st.*, b.name as business_name, b.status as business_status
+      FROM staff st
+      JOIN businesses b ON st.business_id = b.id
+      WHERE (
+        UPPER(st.invite_code) = ? 
+        OR UPPER(REPLACE(COALESCE(st.invite_code, ''), '-', '')) = ?
+        OR st.id = ?
+      ) AND b.status IN ('APPROVED', 'ACTIVE')
+      LIMIT 1
+    `).get(rawCode, cleanCode, rawCode) as any;
+
+    if (staffRow) {
+      db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
+      clearBotUserState(db, chatId);
+      logBusinessBotAudit(db, 'STAFF_LINKED_VIA_CODE', tgUserId, null, staffRow.id, { staff_name: staffRow.name, code: rawCode });
+      await sendBusinessBotMessage(
+        chatId,
+        `🎉 <b>Xush kelibsiz, ${staffRow.name}!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🏢 Muassasa: <b>${staffRow.business_name}</b>\n` +
+        `👨‍⚕️ Yo‘nalishingiz: <b>${staffRow.title || 'Mutaxassis'}</b>\n\n` +
+        `Siz muvaffaqiyatli mutaxassis sifatida biriktirildingiz.\n` +
+        `Endi o‘z yo‘nalishingiz bo‘yicha navbatlarni boshqarishingiz mumkin!`,
+        { replyMarkup: getBusinessDashboardKeyboard(lang, 'EMPLOYEE') }
+      );
+      return;
+    } else {
+      await sendBusinessBotMessage(
+        chatId,
+        `❌ <b>Mutaxassis kodi topilmadi yoki yaroqsiz!</b>\n\nIltimos, kodingizni tekshirib qayta kiriting yoki rahbaringizdan to‘g‘ri kodni so‘rang.`,
+        { replyMarkup: getGuestKeyboard(lang, false) }
+      );
+      return;
+    }
+  }
+
+  // 3b. Staff / Specialist code entry button
+  if (text === '🔑 Xodim / Mutaxassis kodi' || text === '🔑 Xodim kodi' || text === '/code' || text === '/staff_login') {
+    setBotUserState(db, chatId, tgUserId, 'STAFF_CODE_INPUT', {}, lang);
+    await sendBusinessBotMessage(
+      chatId,
+      `🔑 <b>Mutaxassis taklif kodini kiriting:</b>\n\n` +
+      `Rahbaringiz bergan taklif kodini yuboring (Masalan: <code>STF-1001</code>):\n\n` +
+      `<i>Kodni kiritishingiz bilan tizim sizni o‘z yo‘nalishingiz bo‘yicha mutaxassis sifatida taniydi.</i>`,
+      {
+        replyMarkup: {
+          keyboard: [[{ text: '❌ Bekor qilish' }]],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  if (getBotUserState(db, chatId).step === 'STAFF_CODE_INPUT') {
+    const rawCode = text.trim().toUpperCase();
+    const cleanCode = rawCode.replace(/[^A-Z0-9]/g, '');
+    const staffRow = db.prepare(`
+      SELECT st.*, b.name as business_name, b.status as business_status
+      FROM staff st
+      JOIN businesses b ON st.business_id = b.id
+      WHERE (
+        UPPER(st.invite_code) = ? 
+        OR UPPER(REPLACE(COALESCE(st.invite_code, ''), '-', '')) = ?
+        OR st.id = ?
+      ) AND b.status IN ('APPROVED', 'ACTIVE')
+      LIMIT 1
+    `).get(rawCode, cleanCode, rawCode) as any;
+
+    if (staffRow) {
+      db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
+      clearBotUserState(db, chatId);
+      logBusinessBotAudit(db, 'STAFF_LINKED_VIA_CODE', tgUserId, null, staffRow.id, { staff_name: staffRow.name, code: rawCode });
+      await sendBusinessBotMessage(
+        chatId,
+        `🎉 <b>Xush kelibsiz, ${staffRow.name}!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🏢 Muassasa: <b>${staffRow.business_name}</b>\n` +
+        `👨‍⚕️ Yo‘nalishingiz: <b>${staffRow.title || 'Mutaxassis'}</b>\n\n` +
+        `Siz muvaffaqiyatli mutaxassis sifatida biriktirildingiz.\n` +
+        `Endi o‘z yo‘nalishingiz bo‘yicha navbatlarni boshqarishingiz mumkin!`,
+        { replyMarkup: getBusinessDashboardKeyboard(lang, 'EMPLOYEE') }
+      );
+      return;
+    } else {
+      await sendBusinessBotMessage(
+        chatId,
+        `❌ <b>Mutaxassis kodi noto‘g‘ri yoki topilmadi!</b>\nIltimos, kodni tekshirib qayta kiriting (Masalan: <code>STF-1001</code>):\n\nYoki bekor qilish uchun pastdagi tugmani bosing.`,
+        {
+          replyMarkup: {
+            keyboard: [[{ text: '❌ Bekor qilish' }]],
+            resize_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+  }
+
+  // 3c. Staff Logout
+  if (text === '🚪 Chiqish (Hisobdan uzish)' || text === '🚪 Chiqish' || text === '/logout') {
+    db.prepare('UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE telegram_chat_id = ? OR telegram_user_id = ?').run(chatId, tgUserId);
+    clearBotUserState(db, chatId);
+    await sendBusinessBotMessage(
+      chatId,
+      '👋 Hisobdan muvaffaqiyatli chiqdingiz. Bot boshlang‘ich holatga qaytarildi.',
+      { replyMarkup: getGuestKeyboard(lang, false) }
+    );
+    return;
+  }
+
   // 4. /start command
   if (text === '/start' || text.startsWith('/start@') || text === '/menu' || text === '/start help') {
     clearBotUserState(db, chatId);
@@ -2238,11 +2440,110 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       return;
     }
 
+
+    // Specialist specific menu buttons
+    if (auth.staff && (text === '📋 Mening navbatim' || text === 'Mening navbatim')) {
+      if (!biz) return;
+      const waiting = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.status = 'WAITING'
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+          AND (
+            q.staff_id = ?
+            OR (
+              (q.staff_id IS NULL OR q.staff_id = '')
+              AND q.service_id IN (SELECT service_id FROM staff_services WHERE staff_id = ?)
+            )
+          )
+        ORDER BY q.joined_at ASC LIMIT 10
+      `).all(biz.id, auth.staff.id, auth.staff.id) as any[];
+
+      if (waiting.length === 0) {
+        await sendBusinessBotMessage(chatId, `📋 <b>${auth.staff.name}</b> uchun hozircha kutayotgan navbatlar yo‘q.`);
+      } else {
+        let msg = `📋 <b>Sizning navbatingizda kutayotgan mijozlar (${waiting.length} ta):</b>\n━━━━━━━━━━━━━━━━\n`;
+        waiting.forEach((w, idx) => {
+          msg += `${idx + 1}. <b>#${w.queue_number}</b> — ${w.customer_name} (${w.service_name || 'Xizmat'})\n`;
+        });
+        await sendBusinessBotMessage(chatId, msg, {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🟢 Keyingi mijozimni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+            ]
+          }
+        });
+      }
+      return;
+    }
+
+    if (auth.staff && (text === '📅 Bugungi bronlarim' || text === 'Bugungi bronlarim')) {
+      if (!biz) return;
+      const bList = db.prepare(`
+        SELECT b.*, s.name as service_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        WHERE b.business_id = ?
+          AND b.booking_date = date('now', '+5 hours')
+          AND b.staff_id = ?
+        ORDER BY b.start_time ASC LIMIT 10
+      `).all(biz.id, auth.staff.id) as any[];
+
+      if (bList.length === 0) {
+        await sendBusinessBotMessage(chatId, `📅 Bugungi kunga sizga biriktirilgan bronlar mavjud emas.`);
+      } else {
+        let msg = `📅 <b>Bugungi bronlaringiz (${bList.length} ta):</b>\n━━━━━━━━━━━━━━━━\n`;
+        bList.forEach((b, idx) => {
+          const stBadge = b.status === 'CONFIRMED' ? '✅' : (b.status === 'IN_SERVICE' ? '🟢' : '⏳');
+          msg += `${idx + 1}. ${stBadge} <b>${b.start_time} - ${b.end_time}</b>: ${b.customer_name} (${b.service_name || 'Xizmat'})\n`;
+        });
+        await sendBusinessBotMessage(chatId, msg);
+      }
+      return;
+    }
+
+    if (auth.staff && (text === '📊 Mening hisobotim' || text === 'Mening hisobotim')) {
+      if (!biz) return;
+      const completedToday = db.prepare(`
+        SELECT count(*) as count, COALESCE(sum(s.price_uzs), 0) as total_sum
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.staff_id = ?
+          AND q.status = 'COMPLETED'
+          AND date(q.completed_at, '+5 hours') = date('now', '+5 hours')
+      `).get(biz.id, auth.staff.id) as any;
+
+      await sendBusinessBotMessage(
+        chatId,
+        `📊 <b>KUNDALIK SHAXSIY HISOBOT — ${auth.staff.name}</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🏢 Muassasa: <b>${biz.name}</b>\n` +
+        `👨‍⚕️ Lavozim: <b>${auth.staff.title || 'Mutaxassis'}</b>\n` +
+        `✅ Bugun xizmat ko‘rsatildi: <b>${completedToday.count || 0} nafar</b> mijoz\n` +
+        `💰 Bugungi xizmatlar summasi: <b>${Number(completedToday.total_sum || 0).toLocaleString()} so‘m</b>\n━━━━━━━━━━━━━━━━`
+      );
+      return;
+    }
+
+    // Super Admin Switch Business Command
+    if (auth.role === 'SUPER_ADMIN' && (text === '🏢 Biznesni almashtirish' || text === '/bizneslar')) {
+      const allBiz = db.prepare("SELECT id, name FROM businesses WHERE status IN ('APPROVED', 'ACTIVE') ORDER BY name ASC LIMIT 10").all() as any[];
+      const buttons = allBiz.map(b => [{ text: `🏢 ${b.name}`, callback_data: `admin_switch_biz_${b.id}` }]);
+      await sendBusinessBotMessage(
+        chatId,
+        `🏢 <b>Boshqarish uchun biznesni tanlang:</b>\nJoriy tanlangan: <b>${biz?.name || 'Noma’lum'}</b>`,
+        { replyMarkup: { inline_keyboard: buttons } }
+      );
+      return;
+    }
+
     // 0. 🟢 KEYINGI MIJOZNI CHAQIRISH (Primary single-tap action)
     if (
       text === t(lang, 'btn_menu_call_next') ||
       text === '🟢 KEYINGI MIJOZNI CHAQIRISH' ||
+      text === '🟢 KEYINGI MIJOZIMNI CHAQIRISH' ||
       text === '🟢 Keyingi mijozni chaqirish' ||
+      text === '🟢 Keyingi mijozimni chaqirish' ||
       text === t(lang, 'btn_menu_next') ||
       text === '➡️ Keyingi mijoz' ||
       text === '➡️ Следующий клиент' ||
@@ -2250,7 +2551,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       text === '/next'
     ) {
       if (!biz) return;
-      const res = executeCallNextCustomerInBot(db, biz.id, auth.user?.id, tgUserId);
+      const res = executeCallNextCustomerInBot(db, biz.id, auth.user?.id, tgUserId, auth.staff?.id);
       if (res.success && res.entry) {
         const isBooking = Boolean(res.entry.is_booking);
         const customerChat = checkEntryTelegramChat(db, res.entry);
@@ -2627,12 +2928,19 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         await sendBusinessBotMessage(chatId, `👥 <b>${biz.name}</b> uchun hali xodimlar kiritilmagan.`);
         return;
       }
-      let stMsg = `👥 <b>XODIMLAR RO‘YXATI — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n`;
+      const botUsername = getBusinessBotUsername();
+      let stMsg = `👥 <b>XODIMLAR VA BOTGA KIRISH KODLARI — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n`;
       staffList.forEach((st, idx) => {
+        const inviteCode = st.invite_code || ('STF-' + (1001 + idx));
+        const botLink = `https://t.me/${botUsername}?start=staff_${inviteCode}`;
+        const isLinked = Boolean(st.telegram_chat_id || st.telegram_user_id);
         stMsg += `<b>${idx + 1}. ${st.name}</b> (${st.title || 'Mutaxassis'})\n` +
           `   📞 Tel: ${st.phone || 'Kiritilmagan'}\n` +
-          `   Holat: ${st.is_active ? '🟢 Ishda (Faol)' : '⚪️ Ta’tilda'}\n\n`;
+          `   🔑 <b>Kirish kodi:</b> <code>${inviteCode}</code>\n` +
+          `   🔗 <b>Telegram havolasi:</b> ${botLink}\n` +
+          `   Holat: ${isLinked ? '🟢 Telegramga ulangan' : '⚪️ Hali kirmagan'}\n\n`;
       });
+      stMsg += `💡 <i>Xodimlaringizga ushbu kod yoki havolani yuboring. Ular botga kirib o‘z yo‘nalishi bo‘yicha navbatlarni boshqara oladilar!</i>`;
       await sendBusinessBotMessage(chatId, stMsg);
       return;
     }
@@ -2876,6 +3184,18 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
         resize_keyboard: true
       }
     });
+    return;
+  }
+
+  if (data.startsWith('admin_switch_biz_')) {
+    const targetBizId = data.replace('admin_switch_biz_', '');
+    const targetBiz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(targetBizId) as any;
+    if (targetBiz) {
+      setBotUserState(db, cbChatId, cbUserId, null, { selected_business_id: targetBiz.id }, lang);
+      await sendBusinessBotMessage(cbChatId, `✅ Boshqaruv <b>${targetBiz.name}</b> muassasasiga o‘tkazildi!`, {
+        replyMarkup: getBusinessDashboardKeyboard(lang, 'SUPER_ADMIN')
+      });
+    }
     return;
   }
 

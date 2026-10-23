@@ -321,6 +321,10 @@ export const api = {
   deleteBusinessService: (id: string) => request<any>(`/api/business/services/${id}`, { method: 'DELETE' }),
   getBusinessStaff: () => request<any[]>('/api/business/staff'),
   createBusinessStaff: (data: any) => request<any>('/api/business/staff', { method: 'POST', body: JSON.stringify(data) }),
+  updateBusinessStaff: (id: string, data: any) => request<any>(`/api/business/staff/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteBusinessStaff: (id: string) => request<any>(`/api/business/staff/${id}`, { method: 'DELETE' }),
+  updateStaffServices: (id: string, services: Array<{ service_id: string; custom_price_uzs?: number | null }>) =>
+    request<any>(`/api/business/staff/${id}/services`, { method: 'POST', body: JSON.stringify({ services }) }),
   cancelBusinessBooking: (id: string, reason?: string) => request<any>(`/api/business/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
   rescheduleBusinessBooking: (id: string, date: string, time: string, staff_id?: string) =>
     request<any>(`/api/business/bookings/${id}/reschedule`, { method: 'POST', body: JSON.stringify({ booking_date: date, start_time: time, staff_id }) }),

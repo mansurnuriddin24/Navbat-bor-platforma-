@@ -52,6 +52,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [botOpened, setBotOpened] = useState<boolean>(false);
   const pollTimerRef = useRef<any>(null);
   const countdownTimerRef = useRef<any>(null);
+  const tgPhoneRef = useRef<string>('+998');
+  const nameRef = useRef<string>('');
+
+  useEffect(() => {
+    const bestPhone = tgPhone && tgPhone.replace(/\D/g, '').length >= 9 ? tgPhone : phone;
+    tgPhoneRef.current = bestPhone;
+  }, [tgPhone, phone]);
+
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   const { isTMA, tgUser, initData, hapticFeedback } = useTelegramWebApp();
 
@@ -108,7 +119,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setBotOpened(false);
 
     try {
-      const session = await api.createTelegramAuthSession(selectedBot);
+      const initialPhone = tgPhoneRef.current && tgPhoneRef.current.replace(/\D/g, '').length >= 9 ? tgPhoneRef.current : undefined;
+      const session = await api.createTelegramAuthSession(selectedBot, initialPhone, nameRef.current || undefined);
       if (session && session.botUsername) {
         session.botUsername = session.botUsername.replace(/^@+/, '').trim();
       }
@@ -137,7 +149,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = setInterval(async () => {
         try {
-          const res = await api.checkTelegramAuthSession(session.sessionId);
+          const res = await api.checkTelegramAuthSession(session.sessionId, tgPhoneRef.current, nameRef.current);
           if (res.status === 'CONFIRMED' && res.token && res.user) {
             clearInterval(pollTimerRef.current);
             if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -306,6 +318,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <p className="text-xs text-slate-600 mb-3.5">
                 Pastdagi tugmani bosing va <b>@{currentBotUser}</b> da <b>START</b> tugmasini bosing
               </p>
+
+              {/* Phone number input for Telegram Registration / Login so it is always saved to database */}
+              <div className="mb-3.5 text-left bg-white/90 p-3 rounded-xl border border-sky-200/80 shadow-2xs">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Telefon raqamingiz (bazada saqlanadi)
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 absolute left-3 top-2.5 text-sky-600" />
+                  <input
+                    type="tel"
+                    id="auth-tg-phone-input"
+                    value={tgPhone && tgPhone !== '+998' ? tgPhone : phone}
+                    onChange={(e) => {
+                      setTgPhone(e.target.value);
+                      setPhone(e.target.value);
+                    }}
+                    placeholder="+998 90 123 45 67"
+                    className="w-full pl-9 pr-3 py-2 text-xs font-semibold border border-sky-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-sky-500 bg-white"
+                  />
+                </div>
+              </div>
 
               {tgSession && (
                 <div className="flex flex-col items-center gap-1.5 mb-4">
@@ -514,15 +547,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
 
               <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">{t('email')}</label>
+                <label className="block font-bold text-slate-700 uppercase mb-1">
+                  {mode === 'login' ? 'Email yoki Telefon raqam' : t('email')}
+                </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                   <input
-                    type="email"
+                    type={mode === 'login' ? 'text' : 'email'}
                     id="auth-email-input"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="example@mail.uz"
+                    placeholder={mode === 'login' ? 'Email yoki +998 90 123 45 67' : 'example@mail.uz'}
                     required
                     className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />

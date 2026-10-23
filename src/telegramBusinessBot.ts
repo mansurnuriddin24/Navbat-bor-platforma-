@@ -491,7 +491,8 @@ export async function notifyBusinessOwnerViaBusinessBot(
       WHERE b.id = ?
     `).get(businessId) as any;
 
-    const targetChat = biz?.biz_chat || biz?.app_chat || biz?.user_chat;
+    const cleanChat = (v: any) => (v && String(v).trim() && String(v).trim() !== 'web_onboard') ? String(v).trim() : null;
+    const targetChat = cleanChat(biz?.biz_chat) || cleanChat(biz?.user_chat) || cleanChat(biz?.app_chat);
     if (!targetChat) return false;
 
     const res = await sendBusinessBotMessage(targetChat, message, options);
@@ -769,10 +770,10 @@ export function getBusinessDashboardKeyboard(lang: BotLanguage, role: BusinessBo
       { text: '👑 Super Admin Boshqaruvi' }
     ]);
     keyboard.push([
-      { text: '🏢 Biznesni almashtirish' }
+      { text: '🏢 Biznesni almashtirish' }, { text: '🔔 Bildirishnomalar' }
     ]);
   } else if (role === 'BUSINESS_OWNER') {
-    keyboard.push([{ text: '🏢 Biznesni almashtirish' }]);
+    keyboard.push([{ text: '🏢 Biznesni almashtirish' }, { text: '🔔 Bildirishnomalar' }]);
   }
 
   return {
@@ -1323,7 +1324,7 @@ export function executeCallNextCustomerInBot(
       // Mark this booking as IN_SERVICE
       db.prepare(`
         UPDATE bookings
-        SET status = 'IN_SERVICE'
+        SET status = 'IN_PROGRESS'
         WHERE id = ?
       `).run(nextBooking.id);
 
@@ -1331,15 +1332,16 @@ export function executeCallNextCustomerInBot(
       const qEntryId = 'qe-bkg-' + nextBooking.id.slice(0, 10);
       db.prepare(`
         INSERT INTO queue_entries (
-          id, business_id, service_id, staff_id, customer_name, customer_phone,
+          id, business_id, service_id, staff_id, customer_id, customer_name, customer_phone,
           queue_number, status, joined_at, called_at, called_source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
         ON CONFLICT(id) DO UPDATE SET status = 'SERVING', called_at = CURRENT_TIMESTAMP
       `).run(
         qEntryId,
         businessId,
         nextBooking.service_id,
         nextBooking.staff_id,
+        nextBooking.customer_id || 'usr-admin',
         nextBooking.customer_name,
         nextBooking.customer_phone || '',
         nextBooking.booking_number
@@ -1804,7 +1806,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       .run(user.id, token, sessionId);
 
     const appUrl = getBusinessPlatformAppUrl(db);
-    const returnUrl = `${appUrl}/?auth_session=${sessionId}&token=${token}#dashboard`;
+    const returnUrl = `${appUrl}/?auth_session=${sessionId}&token=${token}#${user?.role === 'SUPER_ADMIN' ? 'admin' : 'dashboard'}`;
     await sendBusinessBotMessage(
       chatId,
       `✅ <b>Muvaffaqiyatli tasdiqlandi!</b>\n━━━━━━━━━━━━━━━━\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSiz NavbatBor Biznes platformasiga Telegram (@${getBusinessBotUsername()}) orqali muvaffaqiyatli kirdingiz.\n\nEndi brauzerdagi saytga qaytsangiz, avtomatik profilingizga kirilganini ko‘rasiz.`,
@@ -1891,7 +1893,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       const appUrl = getBusinessPlatformAppUrl(db);
       const authData = getBusinessBotHooks().authenticateTelegramUser ? getBusinessBotHooks().authenticateTelegramUser!(chatId, { first_name: msg.from?.first_name, username: msg.from?.username }) : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
       const panelUrl = authData?.token ? `${appUrl}/?token=${authData.token}#business-dashboard` : `${appUrl}/#business-dashboard`;
-      const returnUrl = `${appUrl}/?auth_session=${session.id}&token=${token}#dashboard`;
+      const returnUrl = `${appUrl}/?auth_session=${session.id}&token=${token}#${user?.role === 'SUPER_ADMIN' ? 'admin' : 'dashboard'}`;
       await sendBusinessBotMessage(
         chatId,
         `✅ <b>Kodingiz tasdiqlandi!</b>\nAssalomu alaykum, <b>${msg.from?.first_name || user.name}</b>!\n\nSaytdagi sessiyangiz faollashdi. Brauzerga qaytib biznesingizni boshqarishingiz mumkin.`,
@@ -2434,7 +2436,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       const pendingAppsCount = (db.prepare(`SELECT COUNT(*) as c FROM business_applications WHERE status = 'PENDING'`).get() as any)?.c || 0;
       const pendingBizsCount = (db.prepare(`SELECT COUNT(*) as c FROM businesses WHERE status = 'PENDING'`).get() as any)?.c || 0;
       const totalUsers = (db.prepare(`SELECT COUNT(*) as c FROM users`).get() as any)?.c || 0;
-      const todayQueues = (db.prepare(`SELECT COUNT(*) as c FROM queue_entries WHERE date(created_at) = date('now', '+5 hours')`).get() as any)?.c || 0;
+      const todayQueues = (db.prepare(`SELECT COUNT(*) as c FROM queue_entries WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')`).get() as any)?.c || 0;
       const appUrl = getBusinessPlatformAppUrl(db);
       const authData = getBusinessBotHooks().authenticateTelegramUser ? getBusinessBotHooks().authenticateTelegramUser!(chatId, { first_name: msg.from?.first_name, username: msg.from?.username }) : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
       const adminUrl = authData?.token ? `${appUrl}/?token=${authData.token}#admin` : `${appUrl}/#admin`;
@@ -2703,6 +2705,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     if (
       text === t(lang, 'btn_menu_current') ||
       text === '👤 Hozirgi mijoz' ||
+      text === '👤 Hozirgi mijozim' ||
       text === '👤 Текущий клиент' ||
       text === '/current'
     ) {
@@ -2722,9 +2725,9 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
           SELECT b.*, s.name as service_name
           FROM bookings b
           LEFT JOIN services s ON b.service_id = s.id
-          WHERE b.business_id = ? AND b.status = 'IN_SERVICE'
+          WHERE b.business_id = ? AND b.status IN ('IN_PROGRESS', 'IN_SERVICE')
             AND b.booking_date = date('now', '+5 hours')
-          ORDER BY b.updated_at DESC, b.start_time ASC
+          ORDER BY b.created_at DESC, b.start_time ASC
           LIMIT 1
         `).get(biz.id) as any;
 
@@ -3119,7 +3122,46 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     }
 
     // 11. 🔔 Bildirishnomalar
+    // 11. 🔔 Bildirishnomalar
     if (text === t(lang, 'btn_menu_notifications') || text === '🔔 Bildirishnomalar' || text === '🔔 Уведомления' || text === '/notifications') {
+      if (!biz) return;
+      try {
+        if (!biz.telegram_chat_id) {
+          db.prepare('UPDATE businesses SET telegram_chat_id = ? WHERE id = ?').run(chatId, biz.id);
+        }
+      } catch (e) {}
+      const recentQ = db.prepare(`SELECT queue_number, customer_name, customer_phone, status, joined_at FROM queue_entries WHERE business_id = ? ORDER BY joined_at DESC LIMIT 3`).all(biz.id) as any[];
+      const recentB = db.prepare(`SELECT booking_number, customer_name, customer_phone, booking_date, start_time FROM bookings WHERE business_id = ? ORDER BY created_at DESC LIMIT 3`).all(biz.id) as any[];
+      let recentEvents = '';
+      if (recentQ.length > 0 || recentB.length > 0) {
+        recentEvents = `\n📋 <b>Oxirgi kelgan navbat va bronlar:</b>\n`;
+        recentQ.forEach((q: any) => {
+          recentEvents += `• 🎫 <b>#${q.queue_number}</b> — ${q.customer_name} (${q.customer_phone || 'Tel yo‘q'}) [${q.status}]\n`;
+        });
+        recentB.forEach((b: any) => {
+          recentEvents += `• 📅 <b>#${b.booking_number}</b> — ${b.customer_name} (${b.booking_date} ${b.start_time})\n`;
+        });
+      }
+      await sendBusinessBotMessage(
+        chatId,
+        `🔔 <b>BILDIRISHNOMALAR VA FAOLLIK — ${biz.name}</b>\n━━━━━━━━━━━━━━━━\n` +
+        `• 🟢 <b>Telegram Chat ID:</b> <code>${biz.telegram_chat_id || chatId}</code> (Ulangan)\n` +
+        `• 🟢 <b>Yangi bronlar:</b> Telegram orqali xabar berish faol\n` +
+        `• 🟢 <b>Navbat chaqiruvi:</b> Mijozga avtomatik eslatish faol\n` +
+        `• 🟢 <b>Veb-sayt sinxronizatsiyasi:</b> Real vaqt SSE ulanishi faol\n` +
+        recentEvents + `\n` +
+        `<i>Mijozlar Telegram bot orqali yoki saytdan navbat olganida, barcha xabarlar bir zumda ushbu chatga yetib keladi.</i>`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '📨 Sinov bildirishnomasini yuborish', callback_data: `test_biz_notif_${biz.id}` }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+    if (false && (text === t(lang, 'btn_menu_notifications'))) {
       if (!biz) return;
       await sendBusinessBotMessage(
         chatId,
@@ -3306,6 +3348,22 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
         resize_keyboard: true
       }
     });
+    return;
+  }
+
+  if (data.startsWith('test_biz_notif_')) {
+    const targetBizId = data.replace('test_biz_notif_', '');
+    const targetBiz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(targetBizId) as any;
+    if (targetBiz) {
+      try { db.prepare('UPDATE businesses SET telegram_chat_id = ? WHERE id = ?').run(cbChatId, targetBiz.id); } catch (e) {}
+      await sendBusinessBotMessage(
+        cbChatId,
+        `✅ <b>SINOV BILDIRISHNOMASI MUVAFFAQIYATLI YETIB KELDI!</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🏢 Muassasa: <b>${targetBiz.name}</b>\n` +
+        `🆔 Chat ID: <code>${cbChatId}</code>\n` +
+        `⚡️ Holat: <b>Barcha yangi bronlar va jonli navbatlar shu yerga real vaqtda yuboriladi!</b>`
+      );
+    }
     return;
   }
 

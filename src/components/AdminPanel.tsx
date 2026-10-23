@@ -2518,7 +2518,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
               <tr>
                 <th className="py-3 px-4">Foydalanuvchi</th>
-                <th className="py-3 px-4">Email & Telefon</th>
+                <th className="py-3 px-4">Telefon raqam & Email</th>
                 <th className="py-3 px-4">Rol</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4 text-center">Xavfsizlik & Bloklash</th>
@@ -2538,11 +2538,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                   <tr key={u.id} className="hover:bg-slate-50/80 transition">
                     <td className="py-3 px-4">
                       <div className="font-bold text-slate-900">{u.name}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">ID: {u.id.slice(0, 8)}...</div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        ID: {u.id.slice(0, 8)}...
+                        {(u as any).telegram_username ? ` • @${(u as any).telegram_username}` : ''}
+                      </div>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="text-slate-700 font-mono font-medium">{u.email}</div>
-                      <div className="text-[11px] text-slate-500 font-mono">{u.phone || '—'}</div>
+                      {u.phone ? (
+                        <a
+                          href={`tel:${u.phone}`}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-md font-mono font-bold text-xs hover:bg-blue-100 transition mb-0.5"
+                        >
+                          📞 {u.phone}
+                        </a>
+                      ) : (
+                        <span className="inline-block px-2 py-0.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-md text-[10px] font-semibold mb-0.5">
+                          Raqam kiritilmagan
+                        </span>
+                      )}
+                      <div className="text-[11px] text-slate-500 font-mono">{u.email}</div>
                     </td>
                     <td className="py-3 px-4">
                       <span className={`font-bold uppercase text-[10px] px-2 py-0.5 rounded ${

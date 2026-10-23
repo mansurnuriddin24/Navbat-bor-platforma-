@@ -2729,7 +2729,8 @@ app.post('/api/auth/register', (req, res) => {
   const token = 'tok-' + crypto.randomBytes(24).toString('hex');
   db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, id);
 
-  logAudit(id, email, 'USER_REGISTERED', 'USER', id, `Rol: ${validRole}`);
+  logAudit(id, email, 'USER_REGISTERED', 'USER', id, `Rol: ${validRole}, Tel: ${formattedPhone || ''}`);
+  try { scheduleCloudDatabaseBackup(db); } catch (e) {}
 
   res.json({
     token,
@@ -2757,6 +2758,9 @@ app.post('/api/auth/login', (req, res) => {
                               lowerId === 'mansurnuriddinov24@gmail.com' ||
                               rawIdentifier === '+998200232540' ||
                               rawIdentifier === '+200232540' ||
+                              rawIdentifier === '+998908862540' ||
+                              rawIdentifier === '908862540' ||
+                              rawIdentifier === '200232540' ||
                               rawIdentifier === '+998752210000';
     if (isAdminIdentifier) {
       const adminUser = db.prepare("SELECT id, name, email, phone, role, status, password_hash FROM users WHERE id = 'usr-admin'").get() as any;
@@ -3924,6 +3928,24 @@ app.post('/api/queue/join', async (req, res) => {
   };
 
   // Notify Business Owner: single notification without duplicate
+  try {
+    if (qBizInfo?.owner_id) {
+      db.prepare('INSERT INTO notifications (id, user_id, title, message, type) VALUES (?, ?, ?, ?, ?)').run(
+        'notif-' + crypto.randomUUID().slice(0, 8),
+        qBizInfo.owner_id,
+        `⚡️ Yangi navbatchi: #${queueNumber}`,
+        `${customer_name || user.name} (${rawCustPhone || 'Tel kiritilmagan'}) — ${qServiceInfo?.name || 'Xizmat'}`,
+        'QUEUE_JOINED'
+      );
+    }
+    if (staff_id) {
+      const stRow = db.prepare('SELECT telegram_chat_id FROM staff WHERE id = ?').get(staff_id) as any;
+      if (stRow?.telegram_chat_id) {
+        sendBusinessBotMessage(stRow.telegram_chat_id, bizQueueAlert, { replyMarkup: bizQueueMarkup }).catch(() => {});
+      }
+    }
+    scheduleCloudDatabaseBackup(db);
+  } catch (e) {}
   let bizNotified = false;
   try {
     bizNotified = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizQueueAlert, { replyMarkup: bizQueueMarkup });
@@ -5316,6 +5338,24 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
   };
 
   let businessTelegramSent = false;
+  try {
+    if (bizInfo?.owner_id) {
+      db.prepare('INSERT INTO notifications (id, user_id, title, message, type) VALUES (?, ?, ?, ?, ?)').run(
+        'notif-' + crypto.randomUUID().slice(0, 8),
+        bizInfo.owner_id,
+        `📅 Yangi bron: #${bookingNumber}`,
+        `${finalCustName} (${finalCustPhone || ''}) — ${booking_date} soat ${start_time} (${service.name || 'Xizmat'})`,
+        'BOOKING_CREATED'
+      );
+    }
+    if (staff_id) {
+      const stRow = db.prepare('SELECT telegram_chat_id FROM staff WHERE id = ?').get(staff_id) as any;
+      if (stRow?.telegram_chat_id) {
+        sendBusinessBotMessage(stRow.telegram_chat_id, bizMsg, { replyMarkup: bkgCallMarkup }).catch(() => {});
+      }
+    }
+    scheduleCloudDatabaseBackup(db);
+  } catch (e) {}
   // Prefer dedicated Business Bot if owner is registered there
   try {
     businessTelegramSent = await notifyBusinessOwnerViaBusinessBot(db, business_id, bizMsg, { replyMarkup: bkgCallMarkup });
@@ -8825,7 +8865,7 @@ export function parseSessionExpiryDate(expiresAt: any): Date {
 
 // Create Telegram Browser Quick Login / Register Session (Single-use, short-lived 5 min)
 app.post('/api/auth/telegram-session', (req, res) => {
-  const { bot_type } = req.body || {};
+  const { bot_type, phone: reqPhone, name: reqName } = req.body || {};
   const sessionId = 'auth_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
   const now = new Date();
@@ -8836,6 +8876,13 @@ app.post('/api/auth/telegram-session', (req, res) => {
     INSERT INTO telegram_auth_sessions (id, code, status, created_at, expires_at)
     VALUES (?, ?, 'PENDING', ?, ?)
   `).run(sessionId, code, createdAt, expiresAt);
+  if (reqPhone || reqName) {
+    try {
+      const digits = String(reqPhone || '').replace(/[^0-9]/g, '');
+      const stdPhone = digits.length >= 7 ? '+998' + digits.slice(-9) : null;
+      setSetting(`tg_session_meta_${sessionId}`, JSON.stringify({ phone: stdPhone, name: reqName ? String(reqName).trim() : null }));
+    } catch (e) {}
+  }
 
   const isBusiness = bot_type === 'business';
   const botUsername = (isBusiness ? getBusinessBotUsername() : getBotUsername()).replace(/^@+/, '').trim();
@@ -8877,6 +8924,41 @@ app.get('/api/auth/telegram-session/:sessionId', (req, res) => {
     }
 
     const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id) as any;
+    if (user) {
+      try {
+        const metaRaw = getSetting(`tg_session_meta_${sessionId}`);
+        const qPhoneRaw = String(req.query.phone || '').replace(/[^0-9]/g, '');
+        const qPhone = qPhoneRaw.length >= 9 ? '+998' + qPhoneRaw.slice(-9) : '';
+        const qName = String(req.query.name || '').trim();
+        const meta = metaRaw ? JSON.parse(metaRaw) : {};
+        const finalPhone = qPhone || meta.phone || '';
+        const finalName = qName || meta.name || '';
+        if (finalPhone || finalName) {
+          if (finalPhone && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 9)) {
+            db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(finalPhone, user.id);
+            user.phone = finalPhone;
+          }
+          if (finalName && (!user.name || user.name.startsWith('Telegram') || user.name === '??')) {
+            db.prepare('UPDATE users SET name = ? WHERE id = ?').run(finalName, user.id);
+            user.name = finalName;
+          }
+          scheduleCloudDatabaseBackup(db);
+        }
+        if (false) {
+          const meta = JSON.parse(metaRaw);
+          if (meta.phone && (!user.phone || user.phone.replace(/[^0-9]/g, '').length < 7)) {
+            db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(meta.phone, user.id);
+            user.phone = meta.phone;
+          }
+          if (meta.name && (!user.name || user.name.startsWith('Telegram') || user.name === '??')) {
+            db.prepare('UPDATE users SET name = ? WHERE id = ?').run(meta.name, user.id);
+            user.name = meta.name;
+          }
+          scheduleCloudDatabaseBackup(db);
+        }
+      } catch (e) {}
+      if (isSuperAdminUser(user)) user.role = 'SUPER_ADMIN';
+    }
     if (!user) {
       return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
     }
@@ -8940,7 +9022,8 @@ app.post('/api/auth/telegram-quick-login', (req, res) => {
     db.prepare('INSERT OR IGNORE INTO user_sessions (token, user_id) VALUES (?, ?)').run(session.token, session.user_id);
   }
 
-  const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, name, email, phone, role, status, telegram_chat_id, telegram_user_id, telegram_username FROM users WHERE id = ?').get(session.user_id) as any;
+  if (user && isSuperAdminUser(user)) user.role = 'SUPER_ADMIN';
   res.json({
     success: true,
     token: session.token,
@@ -14078,7 +14161,32 @@ app.get('/api/admin/users', requireAuth, requireRole(['ADMIN']), (req, res) => {
   }
   sql += ' ORDER BY created_at DESC LIMIT 200';
 
-  const users = db.prepare(sql).all(...params);
+  const users = db.prepare(sql).all(...params) as any[];
+  for (const u of users) {
+    if (!u.phone || String(u.phone).replace(/[^0-9]/g, '').length < 7) {
+      try {
+        const recovered = db.prepare(`
+          SELECT p FROM (
+            SELECT customer_phone as p, joined_at as ts FROM queue_entries WHERE (customer_id = ? OR (telegram_chat_id IS NOT NULL AND telegram_chat_id = ?)) AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+            UNION ALL
+            SELECT customer_phone as p, created_at as ts FROM bookings WHERE customer_id = ? AND customer_phone IS NOT NULL AND length(customer_phone) >= 7
+            UNION ALL
+            SELECT phone as p, created_at as ts FROM businesses WHERE owner_id = ? AND phone IS NOT NULL AND length(phone) >= 7
+            UNION ALL
+            SELECT owner_phone as p, created_at as ts FROM business_applications WHERE (telegram_chat_id = ? OR telegram_user_id = ?) AND owner_phone IS NOT NULL AND length(owner_phone) >= 7
+          ) ORDER BY ts DESC LIMIT 1
+        `).get(u.id, u.telegram_chat_id || '', u.id, u.id, u.telegram_chat_id || '', u.telegram_chat_id || '') as any;
+        if (recovered?.p) {
+          const digits = String(recovered.p).replace(/[^0-9]/g, '');
+          if (digits.length >= 7) {
+            const std = '+998' + digits.slice(-9);
+            db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(std, u.id);
+            u.phone = std;
+          }
+        }
+      } catch (e) {}
+    }
+  }
   res.json(users);
 });
 

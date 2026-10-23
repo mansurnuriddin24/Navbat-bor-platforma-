@@ -84,17 +84,22 @@ export const api = {
       body: JSON.stringify({ initData: data.initData, user: cleanUser })
     });
   },
-  createTelegramAuthSession: (botType?: 'customer' | 'business') => {
+  createTelegramAuthSession: (botType?: 'customer' | 'business', phone?: string, name?: string) => {
     const validBotType = typeof botType === 'string' && (botType === 'business' || botType === 'customer')
       ? botType
       : 'customer';
     return request<{ sessionId: string; code: string; botUsername: string; botUrl: string; deepLink: string; tgDirect: string; expiresAt: string; botType?: string }>(
       '/api/auth/telegram-session',
-      { method: 'POST', body: JSON.stringify({ bot_type: validBotType }) }
+      { method: 'POST', body: JSON.stringify({ bot_type: validBotType, phone: phone || undefined, name: name || undefined }) }
     );
   },
-  checkTelegramAuthSession: (sessionId: string) =>
-    request<{ status: 'PENDING' | 'CONFIRMED' | 'EXPIRED'; token?: string; user?: any }>(`/api/auth/telegram-session/${sessionId}`),
+  checkTelegramAuthSession: (sessionId: string, phone?: string, name?: string) => {
+    const qp = new URLSearchParams();
+    if (phone && phone.replace(/\D/g, '').length >= 9) qp.set('phone', phone);
+    if (name && name.trim()) qp.set('name', name.trim());
+    const qs = qp.toString() ? `?${qp.toString()}` : '';
+    return request<{ status: 'PENDING' | 'CONFIRMED' | 'EXPIRED'; token?: string; user?: any }>(`/api/auth/telegram-session/${sessionId}${qs}`);
+  },
   consumeTelegramAuthSession: (sessionId: string) =>
     request<{ success: boolean }>(`/api/auth/telegram-session/${sessionId}/consume`, { method: 'POST' }),
   quickTelegramLogin: (data: { phone?: string; name?: string; username?: string; sessionId?: string; code?: string }) =>

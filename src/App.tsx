@@ -111,6 +111,18 @@ export default function App() {
   const [legalModalType, setLegalModalType] = useState<'privacy' | 'terms' | 'support' | null>(null);
   const [qrModalBusiness, setQrModalBusiness] = useState<BusinessItem | null>(null);
 
+  const isUserSuperAdmin = (u?: User | null): boolean => {
+    if (!u) return false;
+    if (['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) return true;
+    const em = (u.email || '').toLowerCase();
+    if (em === 'mansurnuriddin24@gmail.com' || em === 'mansur@gmail.com' || em === 'admin@navbatbor.uz') return true;
+    const ph = (u.phone || '').replace(/\D/g, '');
+    if (ph.endsWith('908862540') || ph.endsWith('200232540')) return true;
+    const tgId = String((u as any).telegram_chat_id || (u as any).telegram_user_id || '');
+    if (tgId === '5564730141') return true;
+    return false;
+  };
+
   // Initial Load: User, Categories, Cities
   useEffect(() => {
     // Check if redirected from Telegram bot auth session or token
@@ -121,26 +133,27 @@ export default function App() {
 
     const navigateUserToPanel = (u: User) => {
       const hash = window.location.hash;
+      const isSuper = isUserSuperAdmin(u);
       if (hash.startsWith('#display') || hash.startsWith('#tablo') || hash.startsWith('#screen') || hash.startsWith('#business/')) {
         return;
       }
-      if ((hash === '#dashboard' || hash === '#business-dashboard' || hash === '#biznes') && ['BUSINESS_OWNER', 'STAFF', 'SUPER_ADMIN', 'ADMIN', 'FOUNDER', 'OWNER'].includes(u.role)) {
-        setActiveView('business-dashboard');
-        return;
-      }
-      if ((hash === '#admin' || hash === '#admin-panel' || hash === '#admin-dashboard') && ['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) {
+      if ((hash === '#admin' || hash === '#admin-panel' || hash === '#admin-dashboard') && isSuper) {
         setActiveView('admin-panel');
         return;
       }
-      if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') {
+      if ((hash === '#dashboard' || hash === '#business-dashboard' || hash === '#biznes') && (['BUSINESS_OWNER', 'STAFF'].includes(u.role) || isSuper)) {
+        setActiveView('business-dashboard');
+        return;
+      }
+      if (isSuper) {
+        setActiveView('admin-panel');
+        window.location.hash = '#admin';
+      } else if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') {
         setActiveView('business-dashboard');
         window.location.hash = '#dashboard';
       } else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') {
         setActiveView('operating-partner');
         window.location.hash = '#partner';
-      } else if (['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) {
-        setActiveView('admin-panel');
-        window.location.hash = '#admin';
       } else {
         setActiveView('customer-dashboard');
         window.location.hash = '#customer';
@@ -1004,7 +1017,7 @@ export default function App() {
               <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
               <p className="text-sm font-semibold text-slate-600">Admin panel yuklanmoqda...</p>
             </div>
-          ) : currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER' || currentUser.role === 'SUPER_ADMIN') ? (
+          ) : currentUser && isUserSuperAdmin(currentUser) ? (
             <AdminPanel onSwitchToPartner={() => setActiveView('operating-partner')} />
           ) : (
             <div className="max-w-md mx-auto my-20 p-8 bg-white border border-slate-200 rounded-2xl text-center shadow-xs">
@@ -1135,12 +1148,15 @@ export default function App() {
               setAuthModalBotType('customer');
             }}
             onSuccess={(u) => {
+              if (isUserSuperAdmin(u)) u.role = 'SUPER_ADMIN';
               setCurrentUser(u);
               setAuthModalOpen(false);
               setAuthModalBotType('customer');
-              if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
+              if (isUserSuperAdmin(u)) {
+                setActiveView('admin-panel');
+                window.location.hash = '#admin';
+              } else if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
               else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') setActiveView('operating-partner');
-              else if (u.role === 'SUPER_ADMIN' || u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
               else setActiveView('customer-dashboard');
             }}
           />

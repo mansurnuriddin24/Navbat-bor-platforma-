@@ -42,6 +42,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const { t, translateCity, lang, setLang, languages } = useTranslation();
 
+  const isSuperAdmin = Boolean(
+    user && (
+      ['SUPER_ADMIN', 'ADMIN', 'FOUNDER', 'OWNER'].includes(user.role) ||
+      ['mansurnuriddin24@gmail.com', 'mansur@gmail.com', 'admin@navbatbor.uz'].includes((user.email || '').toLowerCase()) ||
+      (user.phone || '').replace(/\D/g, '').endsWith('908862540') ||
+      (user.phone || '').replace(/\D/g, '').endsWith('200232540') ||
+      String((user as any).telegram_chat_id || (user as any).telegram_user_id || '') === '5564730141'
+    )
+  );
+
   const navigateTo = (view: 'home' | 'search' | 'customer-dashboard' | 'business-dashboard' | 'admin-panel' | 'operating-partner' | 'for-customers' | 'for-business') => {
     setActiveView(view);
     setMobileMenuOpen(false);
@@ -237,7 +247,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               )}
 
-              {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
+              {(isSuperAdmin || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                 <div className="flex items-center gap-1.5">
                   <button
                     id="nav-partner-admin-btn"
@@ -495,7 +505,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </button>
                 )}
 
-                {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
+                {(isSuperAdmin || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                   <button
                     onClick={() => navigateTo('admin-panel')}
                     className={`w-full text-left px-3.5 py-3 rounded-xl text-sm font-semibold transition flex items-center justify-between min-h-[44px] cursor-pointer ${

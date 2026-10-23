@@ -215,7 +215,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               )}
 
-              {(user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') && (
+              {(user.role === 'BUSINESS_OWNER' || user.role === 'STAFF' || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                 <button
                   id="nav-business-dashboard-btn"
                   onClick={() => navigateTo('business-dashboard')}
@@ -237,7 +237,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               )}
 
-              {(user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
+              {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                 <div className="flex items-center gap-1.5">
                   <button
                     id="nav-partner-admin-btn"
@@ -268,7 +268,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       else navigateTo('customer-dashboard');
                     } else if (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') {
                       navigateTo('business-dashboard');
-                    } else if (user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
+                    } else if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
                       navigateTo('admin-panel');
                     }
                   }}
@@ -463,7 +463,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </button>
                 )}
 
-                {(user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') && (
+                {(user.role === 'BUSINESS_OWNER' || user.role === 'STAFF' || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                   <button
                     onClick={() => navigateTo('business-dashboard')}
                     className={`w-full text-left px-3.5 py-3 rounded-xl text-sm font-semibold transition flex items-center justify-between min-h-[44px] cursor-pointer ${
@@ -479,7 +479,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </button>
                 )}
 
-                {(user.role === 'OPERATING_PARTNER' || user.role === 'SALES_MANAGER' || user.role === 'BUSINESS_MANAGER' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
+                {(user.role === 'OPERATING_PARTNER' || user.role === 'SALES_MANAGER' || user.role === 'BUSINESS_MANAGER' || user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                   <button
                     onClick={() => navigateTo('operating-partner')}
                     className={`w-full text-left px-3.5 py-3 rounded-xl text-sm font-semibold transition flex items-center justify-between min-h-[44px] cursor-pointer ${
@@ -495,7 +495,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </button>
                 )}
 
-                {(user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
+                {(user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') && (
                   <button
                     onClick={() => navigateTo('admin-panel')}
                     className={`w-full text-left px-3.5 py-3 rounded-xl text-sm font-semibold transition flex items-center justify-between min-h-[44px] cursor-pointer ${

@@ -1709,7 +1709,7 @@ async function notifyQueueCalled(entryId: string, options?: { skipBusinessAlert?
              u.name as user_name
       FROM queue_entries q
       JOIN businesses b ON q.business_id = b.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       LEFT JOIN users u ON q.customer_id = u.id
       WHERE q.id = ?
     `).get(entryId) as any;
@@ -1815,7 +1815,7 @@ async function notifyQueueServing(entryId: string): Promise<boolean> {
              s.name as service_name, u.name as user_name
       FROM queue_entries q
       JOIN businesses b ON q.business_id = b.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       LEFT JOIN users u ON q.customer_id = u.id
       WHERE q.id = ?
     `).get(entryId) as any;
@@ -1872,7 +1872,7 @@ async function notifyQueueCompleted(entryId: string): Promise<boolean> {
              s.name as service_name, u.name as user_name
       FROM queue_entries q
       JOIN businesses b ON q.business_id = b.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       LEFT JOIN users u ON q.customer_id = u.id
       WHERE q.id = ?
     `).get(entryId) as any;
@@ -1923,7 +1923,7 @@ async function notifyQueueCancelled(entryId: string, reason?: string): Promise<b
              s.name as service_name, u.name as user_name
       FROM queue_entries q
       JOIN businesses b ON q.business_id = b.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       LEFT JOIN users u ON q.customer_id = u.id
       WHERE q.id = ?
     `).get(entryId) as any;
@@ -1975,7 +1975,7 @@ async function checkAndNotifyNearQueue(businessId: string): Promise<void> {
              s.name as service_name, s.duration_minutes
       FROM queue_entries q
       JOIN businesses b ON q.business_id = b.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status = 'WAITING' 
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
       ORDER BY q.joined_at ASC
@@ -2546,7 +2546,7 @@ app.get('/sitemap.xml', (req, res) => {
 });
 
 // Auth Helpers & Role RBAC
-const FOUNDER_EMAILS = ['rasulovjahongir074@gmail.com', 'admin@navbatbor.uz', 'mansur@gmail.com'];
+const FOUNDER_EMAILS = ['rasulovjahongir074@gmail.com', 'admin@navbatbor.uz', 'mansur@gmail.com', 'mansurnuriddin24@gmail.com'];
 
 function isSuperAdminUser(user: any): boolean {
   if (!user) return false;
@@ -2581,7 +2581,8 @@ function getAuthUser(req: Request): any | null {
   const session = db.prepare('SELECT user_id FROM user_sessions WHERE token = ?').get(token) as { user_id: string } | undefined;
   if (!session) return null;
 
-  const user = db.prepare('SELECT id, name, email, phone, role, status, assigned_district, telegram_chat_id, telegram_username, COALESCE(reminder_30m_enabled, 1) as reminder_30m_enabled, COALESCE(telegram_notifications_enabled, 1) as telegram_notifications_enabled FROM users WHERE id = ?').get(session.user_id);
+  const user = db.prepare('SELECT id, name, email, phone, role, status, assigned_district, telegram_chat_id, telegram_username, COALESCE(reminder_30m_enabled, 1) as reminder_30m_enabled, COALESCE(telegram_notifications_enabled, 1) as telegram_notifications_enabled FROM users WHERE id = ?').get(session.user_id) as any;
+  if (user && isSuperAdminUser(user)) user.role = 'SUPER_ADMIN';
   return user || null;
 }
 
@@ -2785,6 +2786,7 @@ app.post('/api/auth/login', (req, res) => {
   const token = 'tok-' + crypto.randomBytes(24).toString('hex');
   db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(token, user.id);
 
+  if (user && isSuperAdminUser(user)) (user as any).role = 'SUPER_ADMIN';
   logAudit(user.id, user.email, 'USER_LOGIN', 'USER', user.id, 'Tizimga kirdi');
 
   res.json({ token, user });
@@ -4144,7 +4146,7 @@ app.post('/api/check-in/resolve', (req, res) => {
       SELECT q.*, biz.name as business_name, biz.address as business_address, s.name as service_name
       FROM queue_entries q
       JOIN businesses biz ON q.business_id = biz.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.id = ? OR q.queue_number = ?
     `).get(qId, qId) as any;
 
@@ -4396,7 +4398,7 @@ app.get('/api/queue/my-active', requireAuth, (req, res) => {
       s.name as service_name, s.duration_minutes
     FROM queue_entries q
     JOIN businesses b ON q.business_id = b.id
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.customer_id = ? AND q.status IN ('WAITING', 'CALLED', 'SERVING')
     ORDER BY q.joined_at DESC
     LIMIT 1
@@ -4467,7 +4469,7 @@ export function calculateQueueWaitTime(businessId: string, targetQueueEntryId?: 
     let servingQuery = `
       SELECT q.id, q.status, q.called_at, q.in_service_at, q.joined_at, s.duration_minutes
       FROM queue_entries q
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status IN ('CALLED', 'SERVING', 'IN_SERVICE')
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     `;
@@ -4497,7 +4499,7 @@ export function calculateQueueWaitTime(businessId: string, targetQueueEntryId?: 
     let waitingQuery = `
       SELECT q.id, q.joined_at, s.duration_minutes
       FROM queue_entries q
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status = 'WAITING'
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     `;
@@ -4688,7 +4690,7 @@ function getCurrentQueueState(businessId: string) {
   const current = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY 
@@ -4704,7 +4706,7 @@ function getCurrentQueueState(businessId: string) {
   const nextWaiting = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -4778,7 +4780,7 @@ function executeCallNextCustomerAtomic(params: {
     const currentCustomer = db.prepare(`
       SELECT q.*, s.name as service_name
       FROM queue_entries q
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
       ORDER BY q.joined_at ASC LIMIT 1
@@ -4788,7 +4790,7 @@ function executeCallNextCustomerAtomic(params: {
     const nextCustomer = db.prepare(`
       SELECT q.*, s.name as service_name
       FROM queue_entries q
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       WHERE q.business_id = ? AND q.status = 'WAITING'
         AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
       ORDER BY q.joined_at ASC LIMIT 1
@@ -5608,7 +5610,7 @@ async function createPendingNextCustomerAction(params: {
   const nextWaiting = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -5621,7 +5623,7 @@ async function createPendingNextCustomerAction(params: {
   const current = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -6145,7 +6147,7 @@ app.get(['/api/queue/waiting', '/queue/waiting'], (req, res) => {
   const waitingList = db.prepare(`
     SELECT q.*, s.name as service_name, s.duration_minutes, st.name as staff_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     LEFT JOIN staff st ON q.staff_id = st.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
@@ -6245,7 +6247,7 @@ app.get('/api/business/:id/queue', requireAuth, (req, res) => {
   const entries = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? 
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY 
@@ -6849,7 +6851,7 @@ app.get('/api/customer/bookings', requireAuth, (req, res) => {
         'QUEUE' as entry_type
       FROM queue_entries q
       JOIN businesses biz ON q.business_id = biz.id
-      JOIN services s ON q.service_id = s.id
+      LEFT JOIN services s ON q.service_id = s.id
       LEFT JOIN staff st ON q.staff_id = st.id
       WHERE q.status IN ('COMPLETED', 'CANCELLED', 'NO_SHOW')
         AND (${qFilter})
@@ -7145,7 +7147,8 @@ function getUserBusiness(userId: string, requestedBizId?: string): any | null {
     if (membership) return membership;
 
     // Admin / Super Admin override
-    const userRole = db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+    const userRole = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+    if (userRole && isSuperAdminUser(userRole)) return db.prepare('SELECT * FROM businesses WHERE id = ?').get(requestedBizId);
     if (userRole && ['SUPER_ADMIN', 'ADMIN', 'FOUNDER'].includes(userRole.role)) {
       return db.prepare('SELECT * FROM businesses WHERE id = ?').get(requestedBizId);
     }
@@ -7162,7 +7165,11 @@ function getUserBusiness(userId: string, requestedBizId?: string): any | null {
   // Default to first owned business
   const firstOwned = db.prepare('SELECT * FROM businesses WHERE owner_id = ? ORDER BY created_at ASC LIMIT 1').get(userId);
   if (firstOwned) return firstOwned;
-  const uRoleRow = db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as any;
+  const uRoleRow = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+  if (uRoleRow && isSuperAdminUser(uRoleRow)) {
+    const anyBiz = db.prepare("SELECT * FROM businesses WHERE status IN ('APPROVED', 'ACTIVE') ORDER BY created_at ASC LIMIT 1").get();
+    if (anyBiz) return anyBiz;
+  }
   if (uRoleRow && ['SUPER_ADMIN', 'ADMIN', 'FOUNDER'].includes(uRoleRow.role)) {
     const anyBiz = db.prepare("SELECT * FROM businesses WHERE status = 'APPROVED' ORDER BY created_at ASC LIMIT 1").get();
     if (anyBiz) return anyBiz;
@@ -7191,7 +7198,7 @@ app.get('/api/business/my-businesses', requireAuth, (req, res) => {
     FROM businesses b
     LEFT JOIN business_memberships bm ON b.id = bm.business_id AND bm.user_id = ?
     LEFT JOIN categories c ON b.category_id = c.id
-    WHERE b.owner_id = ? OR bm.user_id = ? OR EXISTS (SELECT 1 FROM users u WHERE u.id = ? AND u.role IN ('SUPER_ADMIN', 'ADMIN', 'FOUNDER'))
+    WHERE b.owner_id = ? OR bm.user_id = ? OR EXISTS (SELECT 1 FROM users u WHERE u.id = ? AND (u.role IN ('SUPER_ADMIN', 'ADMIN', 'FOUNDER') OR u.telegram_chat_id = '5564730141' OR u.email IN ('mansurnuriddin24@gmail.com', 'mansur@gmail.com', 'admin@navbatbor.uz')))
     ORDER BY b.created_at DESC
   `).all(user.id, user.id, user.id, user.id);
 
@@ -7601,7 +7608,7 @@ app.post('/api/businesses/register', (req, res) => {
         user = existing;
         sessionToken = 'tok-' + crypto.randomBytes(24).toString('hex');
         db.prepare('INSERT INTO user_sessions (token, user_id) VALUES (?, ?)').run(sessionToken, existing.id);
-        db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ?").run(existing.id);
+        db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ? AND role = 'CUSTOMER'").run(existing.id);
       } else {
         return res.status(400).json({ error: 'Ushbu email bilan akkaunt mavjud. Iltimos, hisobingiz parolini to‘g‘ri kiriting yoki avval tizimga kiring.' });
       }
@@ -7616,7 +7623,7 @@ app.post('/api/businesses/register', (req, res) => {
     }
   } else {
     // Elevate role to BUSINESS_OWNER if needed
-    db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ?").run(user.id);
+    db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ? AND role = 'CUSTOMER'").run(user.id);
   }
 
   const baseSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -7639,6 +7646,9 @@ app.post('/api/businesses/register', (req, res) => {
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'FREE', 0, 0, ?, ?, ?, 'TRIAL', 1, 1, ?)
   `).run(bizId, user.id, name, slug, category_id, city_id, district || '', address, phone, description || '', finalLat, finalLng, trialExpiryDate, nowIso);
+  if (req.body.logo_url) {
+    try { db.prepare('UPDATE businesses SET logo_url = ? WHERE id = ?').run(String(req.body.logo_url), bizId); } catch (e) {}
+  }
 
   // Also record in business_applications for admin audit and bot synchronization
   const appId = 'app-' + crypto.randomUUID().slice(0, 8);
@@ -8764,7 +8774,7 @@ export function verifyTelegramWebAppData(initData: string, botToken: string): { 
 app.post('/api/auth/telegram-webapp', (req, res) => {
   const { initData, user: fallbackUser } = req.body;
   const botToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
-  const bizBotToken = process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
+  const bizBotToken = getSetting('telegram_business_bot_token') || process.env.BUSINESS_BOT_TOKEN || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
 
   let verifiedUser = null;
   if (initData && (botToken || bizBotToken)) {
@@ -9200,7 +9210,7 @@ async function sendTelegramBusinessPanel(chatId: string, bizInfo: any) {
   const current = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -9209,7 +9219,7 @@ async function sendTelegramBusinessPanel(chatId: string, bizInfo: any) {
   const nextWaiting = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -9255,7 +9265,7 @@ async function sendTelegramBusinessPanel(chatId: string, bizInfo: any) {
 // 3. Send the Admin Panel in Telegram
 async function sendTelegramAdminPanel(chatId: string, adminUser: any) {
   const totalBiz = (db.prepare('SELECT count(*) as c FROM businesses').get() as any)?.c || 0;
-  const activeBiz = (db.prepare("SELECT count(*) as c FROM businesses WHERE status = 'ACTIVE'").get() as any)?.c || 0;
+  const activeBiz = (db.prepare("SELECT count(*) as c FROM businesses WHERE status IN ('ACTIVE', 'APPROVED')").get() as any)?.c || 0;
   const totalUsers = (db.prepare('SELECT count(*) as c FROM users').get() as any)?.c || 0;
   const totalTodayQueues = (db.prepare("SELECT count(*) as c FROM queue_entries WHERE date(joined_at, '+5 hours') = date('now', '+5 hours')").get() as any)?.c || 0;
   const totalTodayBookings = (db.prepare("SELECT count(*) as c FROM bookings WHERE booking_date = date('now', '+5 hours')").get() as any)?.c || 0;
@@ -9470,7 +9480,7 @@ async function handleTelegramNextCustomerPrompt(chatId: string, telegramUserId: 
   const current = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -9479,7 +9489,7 @@ async function handleTelegramNextCustomerPrompt(chatId: string, telegramUserId: 
   const nextWaiting = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -9740,7 +9750,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         const waiting = db.prepare(`
           SELECT q.*, s.name as service_name
           FROM queue_entries q
-          JOIN services s ON q.service_id = s.id
+          LEFT JOIN services s ON q.service_id = s.id
           WHERE q.business_id = ? AND q.status = 'WAITING'
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
           ORDER BY q.joined_at ASC LIMIT 10
@@ -9775,7 +9785,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         const cur = db.prepare(`
           SELECT q.*, s.name as service_name
           FROM queue_entries q
-          JOIN services s ON q.service_id = s.id
+          LEFT JOIN services s ON q.service_id = s.id
           WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
           ORDER BY q.joined_at ASC LIMIT 1
@@ -10750,6 +10760,9 @@ async function processTelegramUpdate(update: any): Promise<void> {
 
     const bizInfo = getBusinessForTelegramUser(chatId, telegramUserId);
     const adminUser = getAdminForTelegramUser(chatId, telegramUserId);
+    const tgAuthData = authenticateTelegramUser(chatId, { first_name: from.first_name, last_name: from.last_name, username: from.username });
+    const adminPanelUrl = tgAuthData?.token ? `${getPlatformAppUrl()}/?token=${tgAuthData.token}#admin-dashboard` : `${getPlatformAppUrl()}/#admin-dashboard`;
+    const bizPanelUrl = tgAuthData?.token ? `${getPlatformAppUrl()}/?token=${tgAuthData.token}#business-dashboard` : `${getPlatformAppUrl()}/#business-dashboard`;
 
     // --- A. MODE SWITCHING COMMANDS ---
     if (text === '🔄 Muassasani almashtirish' || text === '/switch_business') {
@@ -10933,7 +10946,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
           message: bText,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '💼 Veb Admin Panel', web_app: { url: `${appUrl}/#admin-dashboard` } }]
+              [{ text: '💼 Veb Admin Panel', web_app: { url: adminPanelUrl } }]
             ]
           }
         });
@@ -10955,7 +10968,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
           message: uText,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '💼 Foydalanuvchilarni boshqarish', web_app: { url: `${appUrl}/#admin-dashboard` } }]
+              [{ text: '💼 Foydalanuvchilarni boshqarish', web_app: { url: adminPanelUrl } }]
             ]
           }
         });
@@ -10998,7 +11011,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             `Barcha bronlar SMS va Telegram orqali eslatmalar bilan ta'minlangan.`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '💼 Bronlar jadvalini ochish', web_app: { url: `${appUrl}/#admin-dashboard` } }]
+              [{ text: '💼 Bronlar jadvalini ochish', web_app: { url: adminPanelUrl } }]
             ]
           }
         });
@@ -11109,7 +11122,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
             `• Tashkent Timezone: <b>Asia/Tashkent</b>`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '💼 To‘liq boshqaruv konsoli', web_app: { url: `${appUrl}/#admin-dashboard` } }]
+              [{ text: '💼 To‘liq boshqaruv konsoli', web_app: { url: adminPanelUrl } }]
             ]
           }
         });
@@ -11147,7 +11160,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         const cur = db.prepare(`
           SELECT q.*, s.name as service_name
           FROM queue_entries q
-          JOIN services s ON q.service_id = s.id
+          LEFT JOIN services s ON q.service_id = s.id
           WHERE q.business_id = ? AND q.status IN ('CALLED', 'IN_SERVICE', 'SERVING')
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
           ORDER BY q.joined_at ASC LIMIT 1
@@ -11191,7 +11204,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         const waiting = db.prepare(`
           SELECT q.*, s.name as service_name
           FROM queue_entries q
-          JOIN services s ON q.service_id = s.id
+          LEFT JOIN services s ON q.service_id = s.id
           WHERE q.business_id = ? AND q.status = 'WAITING'
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
           ORDER BY q.joined_at ASC LIMIT 10
@@ -11502,8 +11515,8 @@ async function processTelegramUpdate(update: any): Promise<void> {
             `Xodimlar ro‘yxati, xizmatlar, narxlar va barcha sozlamalarni veb-kabinet orqali boshqarishingiz mumkin:`,
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: `${appUrl}/#business-dashboard` } }],
-              [{ text: '🔗 Brauzerda ochish', url: `${appUrl}/#business-dashboard` }]
+              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: bizPanelUrl } }],
+              [{ text: '🔗 Brauzerda ochish', url: bizPanelUrl }]
             ]
           }
         });
@@ -12252,7 +12265,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
         SELECT q.*, b.name as business_name, s.name as service_name
         FROM queue_entries q
         JOIN businesses b ON q.business_id = b.id
-        JOIN services s ON q.service_id = s.id
+        LEFT JOIN services s ON q.service_id = s.id
         WHERE q.telegram_chat_id = ? AND q.status IN ('WAITING', 'CALLED')
         ORDER BY q.joined_at ASC
       `).all(chatId) as any[];
@@ -12605,7 +12618,7 @@ async function startTelegramPolling() {
     return;
   }
 
-  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production');
   if (isRenderProd) {
     const renderBaseUrl = (process.env.RENDER_EXTERNAL_URL || 'https://navbat-bor-platforma.onrender.com').replace(/\/+$/, '');
     const webhookUrl = `${renderBaseUrl}/api/telegram/webhook`;
@@ -13865,7 +13878,7 @@ app.post('/api/invitations/:token/accept', requireAuth, (req, res) => {
     // If role is OWNER, transfer business owner_id
     if (invite.role === 'OWNER') {
       db.prepare('UPDATE businesses SET owner_id = ? WHERE id = ?').run(user.id, biz.id);
-      db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ?").run(user.id);
+      db.prepare("UPDATE users SET role = 'BUSINESS_OWNER' WHERE id = ? AND role = 'CUSTOMER'").run(user.id);
     }
 
     // Add or update business membership
@@ -14828,7 +14841,7 @@ app.get('/api/business/profile', requireAuth, (req, res) => {
 });
 
 // Secure Image Upload (JPG, PNG, WebP with Magic Bytes Inspection)
-app.post('/api/upload', requireAuth, (req, res) => {
+app.post('/api/upload', (req, res) => {
   const { data, filename, mimeType } = req.body;
   if (!data) {
     return res.status(400).json({ error: 'Fayl maʼlumotlari yuborilmadi' });
@@ -15115,7 +15128,7 @@ app.get('/api/public-queue/:slug', (req, res) => {
   const queueList = db.prepare(`
     SELECT q.id, q.queue_number, q.customer_name, q.status, q.joined_at, q.called_at, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND date(q.joined_at) = date('now')
     ORDER BY 
       CASE q.status 
@@ -15191,7 +15204,7 @@ function getDisplayQueueData(tokenOrSlug: string) {
            COALESCE(st.name, ?) as staff_name,
            ? as room_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     LEFT JOIN staff st ON q.staff_id = st.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'SERVING')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
@@ -15221,7 +15234,7 @@ function getDisplayQueueData(tokenOrSlug: string) {
            COALESCE(st.name, ?) as staff_name,
            ? as room_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     LEFT JOIN staff st ON q.staff_id = st.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
@@ -16587,6 +16600,11 @@ async function startServer() {
       .then(async (res) => {
         if (res.restored) {
           console.log(`[CloudPersistence] Restored ${res.rows} records from ${res.source} (Total businesses: ${res.businessesCount})`);
+          try {
+            db.prepare("UPDATE users SET role = 'SUPER_ADMIN', telegram_chat_id = COALESCE(telegram_chat_id, '5564730141') WHERE id = 'usr-admin'").run();
+            db.prepare("DELETE FROM queue_entries WHERE id = 'qe-771d0dfe' OR id LIKE 'qe-audit-%' OR customer_name = 'Audit Test Navbatchi'").run();
+            await performCloudDatabaseBackup(db, true);
+          } catch (e) {}
         } else {
           await performCloudDatabaseBackup(db, true);
         }

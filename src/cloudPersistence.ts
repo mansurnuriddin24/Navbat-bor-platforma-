@@ -22,7 +22,10 @@ const BACKUP_TABLES = [
   'subscription_transactions',
   'extra_service_orders',
   'promo_codes',
-  'uploaded_files'
+  'uploaded_files',
+  'app_settings',
+  'telegram_user_states',
+  'business_bot_user_states'
 ];
 
 const LOCAL_SNAPSHOT_PATH = path.join(process.cwd(), 'data', 'cloud-snapshot.json');
@@ -78,6 +81,7 @@ export function importDatabaseSnapshot(db: DatabaseSync, snapshot: Record<string
 
       for (const row of rows) {
         if (!row || typeof row !== 'object') continue;
+        if (table === 'queue_entries' && (row.id === 'qe-771d0dfe' || String(row.id || '').startsWith('qe-audit-') || row.customer_name === 'Audit Test Navbatchi')) continue;
         const cols = Object.keys(row).filter((k) => validCols.has(k));
         if (cols.length === 0) continue;
 

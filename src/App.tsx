@@ -124,6 +124,14 @@ export default function App() {
       if (hash.startsWith('#display') || hash.startsWith('#tablo') || hash.startsWith('#screen') || hash.startsWith('#business/')) {
         return;
       }
+      if ((hash === '#dashboard' || hash === '#business-dashboard' || hash === '#biznes') && ['BUSINESS_OWNER', 'STAFF', 'SUPER_ADMIN', 'ADMIN', 'FOUNDER', 'OWNER'].includes(u.role)) {
+        setActiveView('business-dashboard');
+        return;
+      }
+      if ((hash === '#admin' || hash === '#admin-panel' || hash === '#admin-dashboard') && ['ADMIN', 'FOUNDER', 'OWNER', 'SUPER_ADMIN'].includes(u.role)) {
+        setActiveView('admin-panel');
+        return;
+      }
       if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') {
         setActiveView('business-dashboard');
         window.location.hash = '#dashboard';
@@ -197,20 +205,44 @@ export default function App() {
       setIsAuthLoading(false);
       cleanCurrentUrl();
     } else {
-      // Check existing session in localStorage
-      api
-        .getMe()
-        .then((res) => {
-          if (res?.user) {
-            setCurrentUser(res.user);
-          }
-        })
-        .catch(() => {
-          // Guest user is fine
-        })
-        .finally(() => {
-          setIsAuthLoading(false);
-        });
+      const tgWebApp = (window as any).Telegram?.WebApp;
+      if (tgWebApp && (tgWebApp.initData || tgWebApp.initDataUnsafe?.user)) {
+        api
+          .loginWithTelegramWebApp({
+            initData: tgWebApp.initData || '',
+            user: tgWebApp.initDataUnsafe?.user
+          })
+          .then((res) => {
+            if (res?.token && res?.user) {
+              setStoredToken(res.token);
+              setCurrentUser(res.user);
+              navigateUserToPanel(res.user);
+            }
+          })
+          .catch(() => {
+            api.getMe().then((me) => {
+              if (me?.user) setCurrentUser(me.user);
+            }).catch(() => {});
+          })
+          .finally(() => {
+            setIsAuthLoading(false);
+          });
+      } else {
+        // Check existing session in localStorage
+        api
+          .getMe()
+          .then((res) => {
+            if (res?.user) {
+              setCurrentUser(res.user);
+            }
+          })
+          .catch(() => {
+            // Guest user is fine
+          })
+          .finally(() => {
+            setIsAuthLoading(false);
+          });
+      }
     }
 
     // Listen for auth-change events across components (e.g., auto-auth on booking or login)
@@ -407,13 +439,13 @@ export default function App() {
         return;
       }
 
-      if (hash === '#admin' || hash === '#admin-panel' || path === '/admin') {
+      if (hash === '#admin' || hash === '#admin-panel' || hash === '#admin-dashboard' || path === '/admin') {
         setActiveView('admin-panel');
         return;
       }
 
       if (hash === '#dashboard' || hash === '#business-dashboard' || hash === '#biznes') {
-        if (currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF') {
+        if (currentUser?.role === 'BUSINESS_OWNER' || currentUser?.role === 'STAFF' || currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'ADMIN' || currentUser?.role === 'FOUNDER' || currentUser?.role === 'OWNER') {
           setActiveView('business-dashboard');
         } else {
           setActiveView('customer-dashboard');
@@ -928,7 +960,7 @@ export default function App() {
               <div className="inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
               <p className="text-sm font-semibold text-slate-600">Biznes kabineti yuklanmoqda...</p>
             </div>
-          ) : currentUser && (currentUser.role === 'BUSINESS_OWNER' || currentUser.role === 'STAFF') ? (
+          ) : currentUser && (currentUser.role === 'BUSINESS_OWNER' || currentUser.role === 'STAFF' || currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'OWNER') ? (
             <BusinessDashboard
               currentUser={currentUser}
               onOpenOnboarding={() => setOnboardModalOpen(true)}
@@ -1108,7 +1140,7 @@ export default function App() {
               setAuthModalBotType('customer');
               if (u.role === 'BUSINESS_OWNER' || u.role === 'STAFF') setActiveView('business-dashboard');
               else if (u.role === 'OPERATING_PARTNER' || u.role === 'SALES_MANAGER' || u.role === 'BUSINESS_MANAGER' || u.role === 'SUPPORT') setActiveView('operating-partner');
-              else if (u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
+              else if (u.role === 'SUPER_ADMIN' || u.role === 'ADMIN' || u.role === 'FOUNDER' || u.role === 'OWNER') setActiveView('admin-panel');
               else setActiveView('customer-dashboard');
             }}
           />

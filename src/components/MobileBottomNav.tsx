@@ -62,7 +62,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     }
     if (user.role === 'BUSINESS_OWNER' || user.role === 'STAFF') {
       setActiveView('business-dashboard');
-    } else if (user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
+    } else if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
       setActiveView('admin-panel');
     } else if (user.role === 'OPERATING_PARTNER' || user.role === 'SALES_MANAGER' || user.role === 'BUSINESS_MANAGER') {
       setActiveView('operating-partner');
@@ -91,7 +91,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         icon: Briefcase,
       };
     }
-    if (user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
+    if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'FOUNDER' || user.role === 'OWNER') {
       return {
         label: 'Admin',
         icon: Shield,

@@ -42,6 +42,8 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
   const [address, setAddress] = useState<string>('');
   const [phone, setPhone] = useState<string>(currentUser?.phone || '+998');
   const [description, setDescription] = useState<string>('');
+  const [logoUrl, setLogoUrl] = useState<string>('');
+  const [uploadingLogo, setUploadingLogo] = useState<boolean>(false);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [gpsLocating, setGpsLocating] = useState<boolean>(false);
@@ -175,6 +177,7 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
         owner_email: ownerEmail,
         owner_password: ownerPassword,
         owner_phone: cleanPhone,
+        logo_url: logoUrl || undefined,
         latitude: latitude || undefined,
         longitude: longitude || undefined,
       });
@@ -310,6 +313,39 @@ export const BusinessOnboardingModal: React.FC<BusinessOnboardingModalProps> = (
                       required
                       className="w-full border border-slate-300 rounded-xl px-3.5 py-2.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Muassasa rasmi / Logotip (ixtiyoriy)
+                  </label>
+                  <div className="flex items-center gap-3">
+                    {logoUrl && (
+                      <img src={logoUrl} alt="Logo" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" />
+                    )}
+                    <label className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl border border-blue-200 cursor-pointer transition inline-flex items-center gap-2">
+                      <span>{uploadingLogo ? 'Yuklanmoqda...' : logoUrl ? 'Rasmni almashtirish' : '📷 Qurilmadan rasm yuklash'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={uploadingLogo}
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (!f) return;
+                          setUploadingLogo(true);
+                          try {
+                            const r = await api.uploadImage(f);
+                            if (r?.url) setLogoUrl(r.url);
+                          } catch (err: any) {
+                            setError(err.message || 'Rasm yuklashda xatolik');
+                          } finally {
+                            setUploadingLogo(false);
+                          }
+                        }}
+                      />
+                    </label>
                   </div>
                 </div>
               </div>

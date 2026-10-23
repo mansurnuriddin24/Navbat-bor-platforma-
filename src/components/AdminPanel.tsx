@@ -2546,7 +2546,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                     </td>
                     <td className="py-3 px-4">
                       <span className={`font-bold uppercase text-[10px] px-2 py-0.5 rounded ${
-                        u.role === 'ADMIN'
+                        ['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(u.role)
                           ? 'bg-rose-100 text-rose-800 font-black'
                           : u.role === 'BUSINESS_OWNER'
                           ? 'bg-indigo-100 text-indigo-800 font-black'
@@ -2579,7 +2579,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
 
                     {/* Security & Block/Unblock toggle */}
                     <td className="py-3 px-4 text-center">
-                      {u.role === 'ADMIN' ? (
+                      {['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(u.role) ? (
                         <span className="text-[11px] text-slate-400 font-medium italic">Himoyalangan</span>
                       ) : u.status === 'ACTIVE' ? (
                         <button
@@ -2623,8 +2623,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                     </td>
 
                     <td className="py-3 px-4 text-right">
-                      {u.role === 'ADMIN' ? (
-                        <span className="text-slate-400 text-[11px]">ADMIN</span>
+                      {['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(u.role) ? (
+                        <span className="text-slate-400 text-[11px]">{u.role}</span>
                       ) : (
                         <select
                           value={u.role}

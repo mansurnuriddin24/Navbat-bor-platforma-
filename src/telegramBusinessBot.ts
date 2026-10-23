@@ -892,7 +892,7 @@ export function approveBusinessApplication(
       // Upgrade role if customer
       db.prepare(`
         UPDATE users 
-        SET role = 'BUSINESS_OWNER', telegram_chat_id = ?, status = 'ACTIVE'
+        SET role = CASE WHEN role IN ('SUPER_ADMIN', 'ADMIN', 'FOUNDER', 'OWNER') THEN role ELSE 'BUSINESS_OWNER' END, telegram_chat_id = ?, status = 'ACTIVE'
         WHERE id = ?
       `).run(app.telegram_chat_id, owner.id);
     }
@@ -1889,6 +1889,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         .run(user.id, token, session.id);
 
       const appUrl = getBusinessPlatformAppUrl(db);
+      const authData = getBusinessBotHooks().authenticateTelegramUser ? getBusinessBotHooks().authenticateTelegramUser!(chatId, { first_name: msg.from?.first_name, username: msg.from?.username }) : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
+      const panelUrl = authData?.token ? `${appUrl}/?token=${authData.token}#business-dashboard` : `${appUrl}/#business-dashboard`;
       const returnUrl = `${appUrl}/?auth_session=${session.id}&token=${token}#dashboard`;
       await sendBusinessBotMessage(
         chatId,
@@ -2046,7 +2048,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         chatId,
         `👑 <b>Assalomu alaykum, Super Administrator!</b>\n\n` +
         `Siz NavbatBor platformasining bosh boshqaruvchisiz.\n` +
-        `🟡 Ko‘rib chiqish kutilayotgan arizalar: <b>${pendingCount} ta</b>\n\n` +
+        `🟡 Ko‘rib chiqish kutilayotgan arizalar: <b>${pendingCount} ta</b>\n` +
+        `🏛 Joriy muassasa: <b>${auth.business?.name || 'Tanlanmagan'}</b>\n\n` +
         `👇 Boshqaruv menyusidan foydalanishingiz mumkin:`,
         { replyMarkup: getBusinessDashboardKeyboard(lang, 'SUPER_ADMIN') }
       );
@@ -2425,10 +2428,44 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
   if (auth.role === 'BUSINESS_OWNER' || auth.role === 'MANAGER' || auth.role === 'EMPLOYEE' || auth.role === 'SUPER_ADMIN') {
     const biz = auth.business;
 
+    // Super Admin Control Panel
+    if (auth.role === 'SUPER_ADMIN' && (text === '👑 Super Admin Boshqaruvi' || text === '/superadmin' || text === '/admin')) {
+      const totalBiz = (db.prepare(`SELECT COUNT(*) as c FROM businesses WHERE status IN ('ACTIVE', 'APPROVED')`).get() as any)?.c || 0;
+      const pendingAppsCount = (db.prepare(`SELECT COUNT(*) as c FROM business_applications WHERE status = 'PENDING'`).get() as any)?.c || 0;
+      const pendingBizsCount = (db.prepare(`SELECT COUNT(*) as c FROM businesses WHERE status = 'PENDING'`).get() as any)?.c || 0;
+      const totalUsers = (db.prepare(`SELECT COUNT(*) as c FROM users`).get() as any)?.c || 0;
+      const todayQueues = (db.prepare(`SELECT COUNT(*) as c FROM queue_entries WHERE date(created_at) = date('now', '+5 hours')`).get() as any)?.c || 0;
+      const appUrl = getBusinessPlatformAppUrl(db);
+      const authData = getBusinessBotHooks().authenticateTelegramUser ? getBusinessBotHooks().authenticateTelegramUser!(chatId, { first_name: msg.from?.first_name, username: msg.from?.username }) : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
+      const adminUrl = authData?.token ? `${appUrl}/?token=${authData.token}#admin` : `${appUrl}/#admin`;
+      const bizUrl = authData?.token ? `${appUrl}/?token=${authData.token}#business-dashboard` : `${appUrl}/#business-dashboard`;
+
+      await sendBusinessBotMessage(
+        chatId,
+        `👑 <b>SUPER ADMIN BOSHQARUV PANELI</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏛 Joriy muassasa: <b>${biz?.name || 'Tanlanmagan'}</b>\n` +
+        `🏢 Faol muassasalar: <b>${totalBiz} ta</b>\n` +
+        `📝 Kutayotgan arizalar: <b>${pendingAppsCount + pendingBizsCount} ta</b>\n` +
+        `👥 Jami foydalanuvchilar: <b>${totalUsers} ta</b>\n` +
+        `🎫 Bugungi navbatlar: <b>${todayQueues} ta</b>\n\n` +
+        `Barcha tizim bo‘limlarini bot menyusidan yoki to‘g‘ridan-to‘g‘ri Veb Super Admin panelidan boshqarishingiz mumkin:`,
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '👑 Super Admin Veb Panelini Ochish', web_app: { url: adminUrl } }],
+              [{ text: '🏢 Biznes Kabinetini Ochish', web_app: { url: bizUrl } }],
+              [{ text: '🌐 Brauzerda ochish (Avto-kirish)', url: adminUrl }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
     // Super Admin: Pending Applications & Approvals
     if (auth.role === 'SUPER_ADMIN' && (
       text.startsWith('📝 Kutayotgan arizalar') || 
-      text === '👑 Super Admin Boshqaruvi' || 
+      text === '/pending_apps' || 
       text === '/arizalar' || 
       text === '/pending'
     )) {
@@ -2930,6 +2967,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     ) {
       if (!biz) return;
       const appUrl = getBusinessPlatformAppUrl(db);
+      const authData = getBusinessBotHooks().authenticateTelegramUser ? getBusinessBotHooks().authenticateTelegramUser!(chatId, { first_name: msg.from?.first_name, username: msg.from?.username }) : fallbackAuthenticateTelegramUser(db, chatId, msg.from);
+      const panelUrl = authData?.token ? `${appUrl}/?token=${authData.token}#business-dashboard` : `${appUrl}/#business-dashboard`;
       await sendBusinessBotMessage(
         chatId,
         `🌐 <b>${biz.name} — Boshqaruv Paneli:</b>\n━━━━━━━━━━━━━━━━\n` +
@@ -2937,8 +2976,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         {
           replyMarkup: {
             inline_keyboard: [
-              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: `${appUrl}/#business-dashboard` } }],
-              [{ text: '🔗 Brauzerda ochish', url: `${appUrl}/#business-dashboard` }]
+              [{ text: '🚀 Veb Boshqaruv Panelini Ochish', web_app: { url: panelUrl } }],
+              [{ text: '🔗 Brauzerda ochish', url: panelUrl }]
             ]
           }
         }
@@ -3742,7 +3781,7 @@ async function renderLiveQueueMessage(chatId: string, businessId: string, db: Da
   const current = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status IN ('CALLED', 'SERVING', 'IN_SERVICE')
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 1
@@ -3751,7 +3790,7 @@ async function renderLiveQueueMessage(chatId: string, businessId: string, db: Da
   const waitingList = db.prepare(`
     SELECT q.*, s.name as service_name
     FROM queue_entries q
-    JOIN services s ON q.service_id = s.id
+    LEFT JOIN services s ON q.service_id = s.id
     WHERE q.business_id = ? AND q.status = 'WAITING'
       AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
     ORDER BY q.joined_at ASC LIMIT 5
@@ -3815,7 +3854,7 @@ export async function startBusinessBotPolling(db: DatabaseSync): Promise<void> {
 
   console.log('[Business Bot Poller] Starting long polling for business bot...');
 
-  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  const isRenderProd = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production');
   if (isRenderProd) {
     const renderBaseUrl = (process.env.RENDER_EXTERNAL_URL || 'https://navbat-bor-platforma.onrender.com').replace(/\/+$/, '');
     const webhookUrl = `${renderBaseUrl}/api/telegram/business-bot-webhook`;

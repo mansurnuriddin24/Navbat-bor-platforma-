@@ -106,7 +106,7 @@ export const OperatingPartnerDashboard: React.FC<OperatingPartnerDashboardProps>
     priority: 'MEDIUM' as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'
   });
 
-  const isFounder = currentUser.role === 'FOUNDER' || currentUser.role === 'ADMIN' || currentUser.email === 'rasulovjahongir074@gmail.com';
+  const isFounder = currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'FOUNDER' || currentUser.role === 'ADMIN' || currentUser.email === 'rasulovjahongir074@gmail.com' || currentUser.email === 'mansurnuriddin24@gmail.com' || currentUser.email === 'mansur@gmail.com';
 
   const showNotification = (msg: string) => {
     setActionSuccessMessage(msg);

@@ -2208,7 +2208,7 @@ function seedDatabase() {
   // 4. Initial Core Admin & Team Users
   const users = [
     { id: 'usr-admin-jahongir', name: 'Jahongir Rasulov', email: 'rasulovjahongir074@gmail.com', phone: '+998901234567', pass: 'admin123', role: 'FOUNDER' },
-    { id: 'usr-admin', name: 'Super Admin', email: 'mansur@gmail.com', phone: '+998200232540', pass: 'Mansur1105', role: 'ADMIN' },
+    { id: 'usr-admin', name: 'Nuriddinov Mansur (Super Admin)', email: 'mansur@gmail.com', phone: '+998200232540', pass: 'Mansur1105', role: 'SUPER_ADMIN' },
     { id: 'usr-operating-partner-qarshi', name: 'Alisher Qodirov (Qarshi Boshqaruvchi)', email: 'partner@navbatbor.uz', phone: '+998971234567', pass: 'partner123', role: 'OPERATING_PARTNER' },
     { id: 'usr-sales-manager-1', name: 'Bobur Mirzayev (Sotuv Menejeri)', email: 'sales@navbatbor.uz', phone: '+998901112233', pass: 'sales123', role: 'SALES_MANAGER' },
     { id: 'usr-support-1', name: 'Texnik Qo‘llab-quvvatlash Markazi', email: 'support-desk@navbatbor.uz', phone: '+998200232540', pass: 'support123', role: 'SUPPORT' },
@@ -2546,11 +2546,11 @@ app.get('/sitemap.xml', (req, res) => {
 });
 
 // Auth Helpers & Role RBAC
-const FOUNDER_EMAILS = ['rasulovjahongir074@gmail.com', 'admin@navbatbor.uz'];
+const FOUNDER_EMAILS = ['rasulovjahongir074@gmail.com', 'admin@navbatbor.uz', 'mansur@gmail.com'];
 
 function isSuperAdminUser(user: any): boolean {
   if (!user) return false;
-  return user.role === 'SUPER_ADMIN' || user.role === 'FOUNDER' || FOUNDER_EMAILS.includes(user.email);
+  return user.role === 'SUPER_ADMIN' || user.role === 'FOUNDER' || FOUNDER_EMAILS.includes(user.email) || String(user.telegram_chat_id) === '5564730141' || String(user.telegram_user_id) === '5564730141' || (user.telegram_username && String(user.telegram_username).replace(/^@/, '').toLowerCase() === 'mansur_0511');
 }
 
 function isFounderUser(user: any): boolean {
@@ -8554,9 +8554,22 @@ app.post('/api/telegram/generate-link-token', requireAuth, (req, res) => {
 function authenticateTelegramUser(tgId: string | null, info: { first_name?: string; last_name?: string; username?: string; phone?: string; name?: string }) {
   const tgIdStr = tgId ? String(tgId) : null;
   let user: any = null;
+  const envSuperIds = Array.from(new Set([...(process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean), '5564730141']));
+  const isSuperAdminTg = (tgIdStr && envSuperIds.includes(tgIdStr)) || (info.username && info.username.replace(/^@/, '').toLowerCase() === 'mansur_0511');
 
+  if (isSuperAdminTg) {
+    user = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get();
+    if (user && tgIdStr) {
+      db.prepare("UPDATE users SET role = 'SUPER_ADMIN', telegram_chat_id = ?, telegram_user_id = ?, telegram_username = COALESCE(?, telegram_username) WHERE id = 'usr-admin'").run(
+        tgIdStr,
+        tgIdStr,
+        info.username ? info.username.replace('@', '') : 'mansur_0511'
+      );
+      user = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get();
+    }
+  }
   // 1. Look up existing customer by Telegram Chat ID or Telegram User ID
-  if (tgIdStr) {
+  if (!user && tgIdStr) {
     user = db.prepare('SELECT * FROM users WHERE telegram_chat_id = ? OR telegram_user_id = ?').get(tgIdStr, tgIdStr);
   }
 
@@ -9027,7 +9040,7 @@ function getAdminForTelegramUser(chatId: string, telegramUserId?: string): any |
   `).get(chatId, tgId) as any;
   if (adminUser) return adminUser;
 
-  const envSuperAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const envSuperAdminIds = Array.from(new Set([...(process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean), '5564730141']));
   if (envSuperAdminIds.includes(tgId) || envSuperAdminIds.includes(chatId)) {
     const adminRecord = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get() as any;
     if (adminRecord) return adminRecord;
@@ -9143,7 +9156,9 @@ function getAdminKeyboard() {
 function getTelegramUserMode(chatId: string): 'CUSTOMER' | 'BUSINESS' | 'ADMIN' {
   try {
     const row = db.prepare('SELECT mode FROM telegram_user_states WHERE chat_id = ?').get(chatId) as any;
-    return (row?.mode as any) || 'CUSTOMER';
+    if (row?.mode) return row.mode as any;
+    if (getAdminForTelegramUser(chatId)) return 'ADMIN';
+    return 'CUSTOMER';
   } catch (e) {
     return 'CUSTOMER';
   }
@@ -10817,7 +10832,7 @@ async function processTelegramUpdate(update: any): Promise<void> {
     if (text.startsWith('/admin_auth ')) {
       const inputPass = text.replace('/admin_auth ', '').trim();
       const envPass = process.env.ADMIN_PASSWORD || 'Mansur1105';
-      const envSuperAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+      const envSuperAdminIds = Array.from(new Set([...(process.env.SUPER_ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean), '5564730141']));
       const isConfiguredAdmin = envSuperAdminIds.includes(chatId) || envSuperAdminIds.includes(telegramUserId);
 
       if ((inputPass === envPass || inputPass === 'Mansur1105.') && (isConfiguredAdmin || adminUser)) {
@@ -12140,6 +12155,11 @@ async function processTelegramUpdate(update: any): Promise<void> {
         username: from.username
       });
 
+      if (adminUser && (text === '/start' || text.startsWith('/start@'))) {
+        setTelegramUserMode(chatId, 'ADMIN');
+        await sendTelegramAdminPanel(chatId, adminUser);
+        return;
+      }
       const userMode = getTelegramUserMode(chatId);
       if (userMode === 'BUSINESS' && bizInfo) {
         await sendTelegramBusinessPanel(chatId, bizInfo);

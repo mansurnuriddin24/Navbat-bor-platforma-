@@ -34,6 +34,11 @@ import {
   sendBusinessBotMessage,
   getBusinessDailyStats
 } from './src/telegramBusinessBot.ts';
+import {
+  restoreDatabaseFromCloud,
+  performCloudDatabaseBackup,
+  scheduleCloudDatabaseBackup
+} from './src/cloudPersistence.ts';
 
 // --- DATABASE INITIALIZATION ---
 const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'navbatbor.sqlite');
@@ -2441,6 +2446,18 @@ app.use((req, res, next) => {
 app.use('/uploads', express.static(uploadsDir));
 
 app.use(express.json({ limit: '10mb' }));
+
+// Auto-trigger cloud database backup on any mutating API call (POST, PUT, PATCH, DELETE)
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.path.startsWith('/api/')) {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        scheduleCloudDatabaseBackup(db, 2000);
+      }
+    });
+  }
+  next();
+});
 
 // Early health check endpoint
 app.get(['/health', '/api/health'], (req, res) => {
@@ -16394,6 +16411,18 @@ async function startServer() {
     console.log(`[NavbatBor] Server running on http://0.0.0.0:${PORT}`);
     // Sync bot bios and descriptions on startup
     syncTelegramBotProfiles().catch(() => {});
+    restoreDatabaseFromCloud(db)
+      .then(async (res) => {
+        if (res.restored) {
+          console.log(`[CloudPersistence] Restored ${res.rows} records from ${res.source} (Total businesses: ${res.businessesCount})`);
+        } else {
+          await performCloudDatabaseBackup(db, true);
+        }
+      })
+      .catch((e) => console.error('[CloudPersistence] Startup restore error:', e));
+    setInterval(() => {
+      performCloudDatabaseBackup(db).catch(() => {});
+    }, 15000);
   });
 }
 

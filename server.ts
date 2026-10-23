@@ -2290,7 +2290,7 @@ function seedDatabase() {
         VALUES (?, 'Nuriddinov Mansur', 'mansurnuriddin24@gmail.com', '+998908862540', ?, 'BUSINESS_OWNER', 'ACTIVE', '5564730141')
       `).run(ownerId, hashPassword('Mansur1105'));
     } else {
-      db.prepare("UPDATE users SET telegram_chat_id = '5564730141', role = 'BUSINESS_OWNER' WHERE id = ?").run(owner.id);
+      db.prepare("UPDATE users SET telegram_chat_id = COALESCE(telegram_chat_id, '5564730141') WHERE id = ?").run(owner.id);
     }
 
     const bizId = 'biz-nasaf-dental';
@@ -16700,7 +16700,41 @@ async function startServer() {
     });
   }
 
+  // Restore all data from Telegram Cloud Backup & local snapshot BEFORE accepting traffic
+  try {
+    const res = await restoreDatabaseFromCloud(db);
+    if (res.restored) {
+      console.log(`[CloudPersistence] Restored ${res.rows} records from ${res.source} (Total businesses: ${res.businessesCount})`);
+      try {
+        db.prepare("UPDATE users SET role = 'SUPER_ADMIN', telegram_chat_id = COALESCE(telegram_chat_id, '5564730141') WHERE id = 'usr-admin'").run();
+        db.prepare("DELETE FROM queue_entries WHERE id = 'qe-771d0dfe' OR id LIKE 'qe-audit-%' OR customer_name = 'Audit Test Navbatchi'").run();
+        await performCloudDatabaseBackup(db, true);
+      } catch (e) {}
+    }
+  } catch (e) {
+    console.error('[CloudPersistence] Startup restore error:', e);
+  }
+
+  // Flush latest database backup to Telegram Cloud on graceful shutdown / redeploy
+  const handleShutdownFlush = async (signal: string) => {
+    console.log(`[CloudPersistence] Received ${signal}, flushing final database backup to Cloud...`);
+    try {
+      await performCloudDatabaseBackup(db, true);
+    } catch (e) {}
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => handleShutdownFlush('SIGTERM'));
+  process.once('SIGINT', () => handleShutdownFlush('SIGINT'));
+
   app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[NavbatBor] Server running on http://0.0.0.0:${PORT}`);
+    syncTelegramBotProfiles().catch(() => {});
+    setInterval(() => {
+      performCloudDatabaseBackup(db).catch(() => {});
+    }, 12000);
+  });
+  if (false)
+    app.listen(PORT, '0.0.0.0', () => {
     console.log(`[NavbatBor] Server running on http://0.0.0.0:${PORT}`);
     // Sync bot bios and descriptions on startup
     syncTelegramBotProfiles().catch(() => {});

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   BarChart3, Calendar as CalendarIcon, Users, Clock, 
   Layers, UserCheck, ShieldCheck, QrCode, DollarSign, 
-  CheckCircle, XCircle, AlertCircle, Plus, Search, RefreshCw, Trash2,
+  CheckCircle, XCircle, AlertCircle, Plus, Search, RefreshCw, Trash2, Edit2,
   Send, Bell, CreditCard, ShieldAlert, CheckCircle2, Smartphone,
   Tv, CalendarCheck, Megaphone, Eye, MousePointerClick,
   ArrowRight, History, CheckCheck, UserMinus, Sparkles, MessageCircle, ExternalLink, X,
@@ -148,6 +148,17 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
   const [newStaffPhone, setNewStaffPhone] = useState<string>('+998');
   const [newStaffExperience, setNewStaffExperience] = useState<number>(5);
   const [newStaffBio, setNewStaffBio] = useState<string>('');
+
+  // Edit Staff State (Ish tajribasi, ism, lavozim, reyting, bio tahrirlash)
+  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
+  const [editStaffName, setEditStaffName] = useState<string>('');
+  const [editStaffTitle, setEditStaffTitle] = useState<string>('');
+  const [editStaffPhone, setEditStaffPhone] = useState<string>('');
+  const [editStaffExperience, setEditStaffExperience] = useState<number>(5);
+  const [editStaffRating, setEditStaffRating] = useState<number>(5.0);
+  const [editStaffBio, setEditStaffBio] = useState<string>('');
+  const [isUpdatingStaff, setIsUpdatingStaff] = useState<boolean>(false);
+
   const [sendingDailyReport, setSendingDailyReport] = useState<boolean>(false);
   const [editingStaffPricing, setEditingStaffPricing] = useState<StaffMember | null>(null);
   const [staffCustomPrices, setStaffCustomPrices] = useState<Record<string, { enabled: boolean; price: string }>>({});
@@ -834,6 +845,56 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
       showToast('Yangi xodim qo‘shildi', 'success');
     } catch (err: any) {
       showToast(err.message || 'Xatolik', 'error');
+    }
+  };
+
+  const handleOpenEditStaff = (st: StaffMember) => {
+    setEditingStaff(st);
+    setEditStaffName(st.name || '');
+    setEditStaffTitle(st.title || '');
+    setEditStaffPhone(st.phone || '+998');
+    setEditStaffExperience(st.experience_years !== undefined && st.experience_years !== null ? Number(st.experience_years) : 5);
+    setEditStaffRating(st.rating !== undefined && st.rating !== null ? Number(st.rating) : 5.0);
+    setEditStaffBio(st.bio || '');
+  };
+
+  const handleUpdateStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStaff) return;
+    setIsUpdatingStaff(true);
+    try {
+      await api.updateBusinessStaff(editingStaff.id, {
+        name: editStaffName.trim(),
+        title: editStaffTitle.trim(),
+        phone: editStaffPhone.trim() || null,
+        experience_years: Number(editStaffExperience) >= 0 ? Number(editStaffExperience) : 5,
+        rating: Number(editStaffRating) > 0 ? Number(editStaffRating) : 5.0,
+        bio: editStaffBio.trim() || null,
+      });
+      const updated = await api.getBusinessStaff();
+      setStaff(updated);
+      setEditingStaff(null);
+      showToast('Xodim ma’lumotlari va ish tajribasi muvaffaqiyatli saqlandi!', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Xatolik yuz berdi', 'error');
+    } finally {
+      setIsUpdatingStaff(false);
+    }
+  };
+
+  const handleDeleteStaff = async (id: string, name: string) => {
+    try {
+      if (typeof window !== 'undefined' && window.confirm) {
+        if (!window.confirm(`${name} xodimini o‘chirmoqchimisiz?`)) return;
+      }
+    } catch {}
+    try {
+      await api.deleteBusinessStaff(id);
+      const updated = await api.getBusinessStaff();
+      setStaff(updated);
+      showToast('Xodim muvaffaqiyatli o‘chirildi', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Xatolik yuz berdi', 'error');
     }
   };
 
@@ -2221,6 +2282,26 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                     </div>
                   )}
 
+                  {/* Action Buttons: Edit Specialist & Delete */}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditStaff(st)}
+                      className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-800 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer border border-slate-200"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>✏️ Tahrirlash</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteStaff(st.id, st.name)}
+                      className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer border border-rose-200/60"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>O‘chirish</span>
+                    </button>
+                  </div>
+
                   {/* Button to open Specialist Custom Pricing Modal */}
                   <button
                     type="button"
@@ -2407,6 +2488,126 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
                       className="flex-1 py-2.5 bg-indigo-600 text-white rounded-xl font-bold"
                     >
                       Saqlash
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Edit Staff Modal (Ish tajribasi, ism, lavozim, reyting, telefon tahrirlash) */}
+          {editingStaff && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Mutaxassis ma’lumotlarini tahrirlash</h3>
+                    <p className="text-xs text-slate-500">Ish tajribasi, lavozim va boshqa ko‘rsatkichlar</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingStaff(null)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleUpdateStaff} className="space-y-4 text-xs">
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Ism Familiya</label>
+                    <input
+                      type="text"
+                      value={editStaffName}
+                      onChange={(e) => setEditStaffName(e.target.value)}
+                      required
+                      className="w-full border border-slate-300 rounded-xl p-2.5 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Lavozim / Mutaxassislik</label>
+                    <input
+                      type="text"
+                      value={editStaffTitle}
+                      onChange={(e) => setEditStaffTitle(e.target.value)}
+                      required
+                      placeholder="Masalan: Bosh shifokor-stomatolog yoki Sartarosh"
+                      className="w-full border border-slate-300 rounded-xl p-2.5"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-indigo-700 uppercase mb-1 flex items-center gap-1">
+                        <span>⏱ Ish tajribasi (yil)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={60}
+                        value={editStaffExperience}
+                        onChange={(e) => setEditStaffExperience(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                        required
+                        className="w-full border-2 border-indigo-200 focus:border-indigo-600 rounded-xl p-2.5 font-bold text-slate-900"
+                      />
+                      <span className="text-[10px] text-slate-500 mt-1 block">Saytda: «{editStaffExperience} yil tajriba» deb chiqadi</span>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-amber-700 uppercase mb-1 flex items-center gap-1">
+                        <span>⭐️ Reyting</span>
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={1}
+                        max={5}
+                        value={editStaffRating}
+                        onChange={(e) => setEditStaffRating(parseFloat(e.target.value) || 5.0)}
+                        required
+                        className="w-full border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900"
+                      />
+                      <span className="text-[10px] text-slate-500 mt-1 block">Masalan: 5.0 yoki 4.9</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Telefon raqami</label>
+                    <input
+                      type="tel"
+                      value={editStaffPhone}
+                      onChange={(e) => setEditStaffPhone(e.target.value)}
+                      placeholder="+998901234567"
+                      className="w-full border border-slate-300 rounded-xl p-2.5 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Qisqacha ma’lumot (Bio, ixtiyoriy)</label>
+                    <textarea
+                      value={editStaffBio}
+                      onChange={(e) => setEditStaffBio(e.target.value)}
+                      rows={2}
+                      placeholder="Mutaxassis haqida qisqacha ma’lumot"
+                      className="w-full border border-slate-300 rounded-xl p-2.5"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setEditingStaff(null)}
+                      className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer"
+                    >
+                      Bekor qilish
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isUpdatingStaff}
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      {isUpdatingStaff ? 'Saqlanmoqda...' : 'Saqlash'}
                     </button>
                   </div>
                 </form>

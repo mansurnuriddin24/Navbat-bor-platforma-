@@ -2830,7 +2830,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                   <div key={st.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
                     <div>
                       <div className="font-bold text-slate-800">{st.name}</div>
-                      <div className="text-[10px] text-slate-400">{st.role_title || st.specialty || 'Mutaxassis'}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {st.title || st.role_title || st.specialty || 'Mutaxassis'} • <span className="font-semibold text-slate-600">{st.experience_years || 5} yil tajriba</span>
+                      </div>
                     </div>
                     <div className="text-[11px] text-amber-500 font-bold flex items-center gap-1">
                       <Star className="w-3 h-3 fill-amber-400" />

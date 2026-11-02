@@ -3,6 +3,7 @@ import { X, Calendar, Clock, User, Check, AlertCircle, Sparkles, CheckCircle2, S
 import confetti from 'canvas-confetti';
 import { api, setStoredToken } from '../api';
 import { Service, StaffMember, User as UserType } from '../types';
+import { formatUzPhoneInput } from '../utils/formatters';
 import { useTranslation } from '../i18n/LanguageContext';
 import {
   getTashkentNow,
@@ -725,14 +726,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   id="booking-customer-phone"
                   placeholder="+998901234567"
                   value={customerPhone}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (!val.startsWith('+998') && !val.startsWith('+')) {
-                      setCustomerPhone('+998' + val.replace(/\D/g, ''));
-                    } else {
-                      setCustomerPhone(val);
-                    }
-                  }}
+                  onChange={(e) => setCustomerPhone(formatUzPhoneInput(e.target.value))}
                   required
                   className="text-xs border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />

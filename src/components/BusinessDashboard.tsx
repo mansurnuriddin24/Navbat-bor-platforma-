@@ -532,49 +532,80 @@ export const BusinessDashboard: React.FC<BusinessDashboardProps> = ({ currentUse
     } catch (err) {}
   };
 
-  // Real-Time SSE listener for instantaneous queue sync
+  // Real-Time SSE listener with resilient reconnect & mobile background recovery
   useEffect(() => {
     if (!business?.id) return;
 
     let es: EventSource | null = null;
-    try {
-      es = new EventSource(`/api/queue/stream/${business.id}`);
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'QUEUE_CALLED') {
-            setCurrentQueueCustomer(data.called);
-            setPendingAction(null);
-            showToast(`Navbat #${data.called.queue_number} (${data.called.customer_name}) chaqirildi!`, 'success');
-            refreshQueueData();
-          } else if (data.type === 'PENDING_ACTION_CREATED') {
-            setPendingAction(data);
-            setPendingCountdown(60);
-          } else if (data.type === 'PENDING_ACTION_CANCELLED') {
-            setPendingAction(null);
-          } else if (data.type === 'SERVICE_COMPLETED' || data.type === 'CUSTOMER_NO_SHOW' || data.type === 'QUEUE_STATUS_UPDATED') {
-            refreshQueueData();
-          } else if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_CANCELLED' || data.type === 'BOOKING_UPDATED') {
-            api.getCalendarBookings().then(setCalendarBookings).catch(() => {});
-            api.getCurrentBusiness().then(cur => setStats(cur.stats)).catch(() => {});
-            refreshQueueData();
-            if (data.type === 'BOOKING_CREATED') {
-              showToast(`Yangi bron kelib tushdi! (#${data.booking?.booking_number || ''})`, 'info');
-            } else if (data.type === 'BOOKING_CANCELLED') {
-              showToast(`Bron bekor qilindi (#${data.booking?.booking_number || ''})`, 'info');
+    let reconnectTimeout: any = null;
+    let isDisposed = false;
+
+    const establishSSE = () => {
+      if (isDisposed) return;
+      try {
+        es = new EventSource(`/api/queue/stream/${business.id}`);
+        es.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'QUEUE_CALLED') {
+              setCurrentQueueCustomer(data.called);
+              setPendingAction(null);
+              showToast(`Navbat #${data.called.queue_number} (${data.called.customer_name}) chaqirildi!`, 'success');
+              refreshQueueData();
+            } else if (data.type === 'PENDING_ACTION_CREATED') {
+              setPendingAction(data);
+              setPendingCountdown(60);
+            } else if (data.type === 'PENDING_ACTION_CANCELLED') {
+              setPendingAction(null);
+            } else if (data.type === 'SERVICE_COMPLETED' || data.type === 'CUSTOMER_NO_SHOW' || data.type === 'QUEUE_STATUS_UPDATED') {
+              refreshQueueData();
+            } else if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_CANCELLED' || data.type === 'BOOKING_UPDATED') {
+              api.getCalendarBookings().then(setCalendarBookings).catch(() => {});
+              api.getCurrentBusiness().then(cur => setStats(cur.stats)).catch(() => {});
+              refreshQueueData();
+              if (data.type === 'BOOKING_CREATED') {
+                showToast(`Yangi bron kelib tushdi! (#${data.booking?.booking_number || ''})`, 'info');
+              } else if (data.type === 'BOOKING_CANCELLED') {
+                showToast(`Bron bekor qilindi (#${data.booking?.booking_number || ''})`, 'info');
+              }
+            } else if (data.type === 'CONNECTED') {
+              setCurrentQueueCustomer(data.currentCustomer);
+              setNextQueueCustomer(data.nextCustomer);
+              setWaitingQueueCount(data.waitingCount);
+              if (data.pendingAction) setPendingAction(data.pendingAction);
             }
-          } else if (data.type === 'CONNECTED') {
-            setCurrentQueueCustomer(data.currentCustomer);
-            setNextQueueCustomer(data.nextCustomer);
-            setWaitingQueueCount(data.waitingCount);
-            if (data.pendingAction) setPendingAction(data.pendingAction);
+          } catch (e) {}
+        };
+        es.onerror = () => {
+          if (es) {
+            try { es.close(); } catch(e){}
+            es = null;
           }
-        } catch (e) {}
-      };
-    } catch (err) {}
+          if (!isDisposed && !reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+              reconnectTimeout = null;
+              establishSSE();
+              refreshQueueData();
+            }, 3000);
+          }
+        };
+      } catch (err) {}
+    };
+
+    establishSSE();
+
+    // Background safety poll every 45 seconds for mobile devices
+    const bgSyncInterval = setInterval(() => {
+      refreshQueueData();
+    }, 45000);
 
     return () => {
-      if (es) es.close();
+      isDisposed = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      clearInterval(bgSyncInterval);
+      if (es) {
+        try { es.close(); } catch(e){}
+      }
     };
   }, [business?.id]);
 

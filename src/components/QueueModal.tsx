@@ -3,6 +3,7 @@ import { X, Users, Clock, AlertCircle, CheckCircle, Send, Share2, Check, Bell } 
 import { api, setStoredToken } from '../api';
 import { Service, User as UserType } from '../types';
 import { useTranslation } from '../i18n/LanguageContext';
+import { formatUzPhoneInput } from '../utils/formatters';
 
 interface QueueModalProps {
   business: any;
@@ -315,7 +316,7 @@ export const QueueModal: React.FC<QueueModalProps> = ({
                 id="queue-phone-input"
                 aria-label={t('phone_number')}
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => setPhone(formatUzPhoneInput(e.target.value))}
                 placeholder="+998 90 123 45 67"
                 required
                 className="w-full text-xs border border-slate-300 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-amber-500"

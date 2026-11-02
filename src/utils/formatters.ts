@@ -58,3 +58,16 @@ export function sanitizeName(name?: string | null): string {
   if (!name) return '';
   return name.replace(/[\uFFFD\u0000-\u001F\u007F-\u009F]/g, '').trim();
 }
+
+export function formatUzPhoneInput(val: string): string {
+  const digits = val.replace(/\D/g, '');
+  if (!digits) return '+998';
+  let rest = digits.startsWith('998') ? digits.slice(3) : digits;
+  rest = rest.slice(0, 9);
+  let formatted = '+998';
+  if (rest.length > 0) formatted += ' ' + rest.slice(0, 2);
+  if (rest.length > 2) formatted += ' ' + rest.slice(2, 5);
+  if (rest.length > 5) formatted += ' ' + rest.slice(5, 7);
+  if (rest.length > 7) formatted += ' ' + rest.slice(7, 9);
+  return formatted;
+}

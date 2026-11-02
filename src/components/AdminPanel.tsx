@@ -2514,7 +2514,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
             </div>
           </div>
 
-          <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto">
+<table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
               <tr>
                 <th className="py-3 px-4">Foydalanuvchi</th>
@@ -2656,6 +2657,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

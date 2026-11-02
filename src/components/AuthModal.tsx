@@ -4,6 +4,7 @@ import { api, setStoredToken } from '../api';
 import { User as UserType } from '../types';
 import { useTelegramWebApp } from '../hooks/useTelegramWebApp';
 import { useTranslation } from '../i18n/LanguageContext';
+import { formatUzPhoneInput } from '../utils/formatters';
 import { NavbatBorLogo } from './NavbatBorLogo';
 
 interface AuthModalProps {
@@ -332,7 +333,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     value={tgPhone && tgPhone !== '+998' ? tgPhone : phone}
                     onChange={(e) => {
                       setTgPhone(e.target.value);
-                      setPhone(e.target.value);
+                      setPhone(formatUzPhoneInput(e.target.value));
                     }}
                     placeholder="+998 90 123 45 67"
                     className="w-full pl-9 pr-3 py-2 text-xs font-semibold border border-sky-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-sky-500 bg-white"

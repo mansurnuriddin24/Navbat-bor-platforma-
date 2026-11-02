@@ -7480,6 +7480,12 @@ app.get('/api/business/staff', requireAuth, (req, res) => {
   const biz = getUserBusiness(user.id);
   if (!biz) return res.status(403).json({ error: 'Ruxsat berilmagan' });
 
+  try {
+    db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE id = 'stf-nasaf-1' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+    db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE id = 'stf-ded404f7' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+    const missing = db.prepare("SELECT id FROM staff WHERE invite_code IS NULL OR TRIM(invite_code) = '' ORDER BY rowid ASC").all() as any[];
+    missing.forEach((m, i) => db.prepare("UPDATE staff SET invite_code = ? WHERE id = ?").run(`STF-${1010 + i}`, m.id));
+  } catch (e) {}
   const staffList = db.prepare('SELECT * FROM staff WHERE business_id = ? ORDER BY is_active DESC, name ASC').all(biz.id) as any[];
   for (const st of staffList) {
     try {

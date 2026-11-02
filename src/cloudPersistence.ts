@@ -151,6 +151,20 @@ export function importDatabaseSnapshot(db: DatabaseSync, snapshot: Record<string
       }
     }
 
+    try {
+      db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE id = 'stf-nasaf-1' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE id = 'stf-ded404f7' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      const missingCodeStaff = db.prepare("SELECT id FROM staff WHERE invite_code IS NULL OR TRIM(invite_code) = '' ORDER BY rowid ASC").all() as any[];
+      missingCodeStaff.forEach((st, idx) => {
+        db.prepare("UPDATE staff SET invite_code = ? WHERE id = ?").run(`STF-${1010 + idx}`, st.id);
+      });
+      db.exec(`
+        INSERT OR IGNORE INTO staff_services (staff_id, service_id)
+        SELECT st.id, s.id FROM staff st JOIN services s ON st.business_id = s.business_id
+        WHERE st.is_active = 1 AND s.is_active = 1;
+      `);
+    } catch {}
+
     db.exec('COMMIT;');
   } catch (err) {
     try {

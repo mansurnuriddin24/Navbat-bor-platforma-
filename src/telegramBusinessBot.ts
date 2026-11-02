@@ -1346,8 +1346,9 @@ export function executeCallNextCustomerInBot(
           LEFT JOIN services s ON q.service_id = s.id
           WHERE q.business_id = ? AND q.status = 'WAITING'
             AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
-          ORDER BY CASE WHEN q.staff_id = ? THEN 0 WHEN (q.staff_id IS NULL OR q.staff_id = '') THEN 1 ELSE 2 END ASC, q.joined_at ASC LIMIT 1
-        `).get(businessId, targetStaffId) as any;
+            AND (q.staff_id = ? OR q.staff_id IS NULL OR q.staff_id = '')
+          ORDER BY CASE WHEN q.staff_id = ? THEN 0 ELSE 1 END ASC, q.joined_at ASC LIMIT 1
+        `).get(businessId, targetStaffId, targetStaffId) as any;
       }
     } else {
       nextWaiting = db.prepare(`
@@ -1391,9 +1392,10 @@ export function executeCallNextCustomerInBot(
             WHERE b.business_id = ?
               AND b.booking_date = date('now', '+5 hours')
               AND b.status IN ('CONFIRMED', 'PENDING')
-            ORDER BY CASE WHEN b.staff_id = ? THEN 0 WHEN (b.staff_id IS NULL OR b.staff_id = '') THEN 1 ELSE 2 END ASC, b.start_time ASC
+              AND (b.staff_id = ? OR b.staff_id IS NULL OR b.staff_id = '')
+            ORDER BY CASE WHEN b.staff_id = ? THEN 0 ELSE 1 END ASC, b.start_time ASC
             LIMIT 1
-          `).get(businessId, targetStaffId) as any;
+          `).get(businessId, targetStaffId, targetStaffId) as any;
         }
       } else {
         nextBooking = db.prepare(`
@@ -1414,7 +1416,20 @@ export function executeCallNextCustomerInBot(
         return { success: false, message: 'Bugungi kunga kutayotgan navbatlar yoki bronlar mavjud emas' };
       }
 
-      // Complete any currently serving live queue entries
+      if (targetStaffId) {
+        db.prepare(`
+          UPDATE queue_entries 
+          SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+          WHERE business_id = ? AND staff_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+        `).run(businessId, targetStaffId);
+      } else {
+        db.prepare(`
+          UPDATE queue_entries 
+          SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+          WHERE business_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+        `).run(businessId);
+      }
+      if (false)
       db.prepare(`
         UPDATE queue_entries 
         SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
@@ -1440,7 +1455,7 @@ export function executeCallNextCustomerInBot(
         qEntryId,
         businessId,
         nextBooking.service_id,
-        nextBooking.staff_id,
+        nextBooking.staff_id || targetStaffId || null,
         nextBooking.customer_id || 'usr-admin',
         nextBooking.customer_name,
         nextBooking.customer_phone || '',
@@ -1486,7 +1501,26 @@ export function executeCallNextCustomerInBot(
       };
     }
 
-    // Complete any currently serving or called entries
+    if (targetStaffId) {
+      db.prepare(`
+        UPDATE queue_entries 
+        SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+        WHERE business_id = ? AND staff_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+      `).run(businessId, targetStaffId);
+      db.prepare(`
+        UPDATE queue_entries 
+        SET status = 'CALLED', called_at = CURRENT_TIMESTAMP, staff_id = COALESCE(NULLIF(staff_id, ''), ?)
+        WHERE id = ?
+      `).run(targetStaffId, nextWaiting.id);
+    } else {
+      db.prepare(`
+        UPDATE queue_entries 
+        SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+        WHERE business_id = ? AND status IN ('CALLED', 'SERVING', 'IN_SERVICE')
+      `).run(businessId);
+    }
+    if (!targetStaffId) db.prepare("UPDATE queue_entries SET status = 'CALLED', called_at = CURRENT_TIMESTAMP WHERE id = ?").run(nextWaiting.id);
+    if (false)
     db.prepare(`
       UPDATE queue_entries 
       SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
@@ -2045,6 +2079,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     `).get(rawCode, cleanCode, rawCode) as any;
 
     if (staffRow) {
+      db.prepare("UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE (telegram_chat_id = ? OR telegram_user_id = ?) AND id != ?").run(chatId, tgUserId, staffRow.id);
       db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
       clearBotUserState(db, chatId);
       setBotUserState(db, chatId, tgUserId, null, { active_staff_id: staffRow.id, selected_business_id: staffRow.business_id }, lang);
@@ -2122,7 +2157,15 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     return;
   }
 
-  if (getBotUserState(db, chatId).step === 'STAFF_CODE_INPUT') {
+  if (getBotUserState(db, chatId).step === 'STAFF_CODE_INPUT' || /^STF[- ]?\d{3,6}$/i.test(text.trim())) {
+    try {
+      db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE id = 'stf-nasaf-1' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE id = 'stf-ded404f7' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      const missingCodeStaff = db.prepare("SELECT id FROM staff WHERE invite_code IS NULL OR TRIM(invite_code) = '' ORDER BY rowid ASC").all() as any[];
+      missingCodeStaff.forEach((st, idx) => {
+        db.prepare("UPDATE staff SET invite_code = ? WHERE id = ?").run(`STF-${1010 + idx}`, st.id);
+      });
+    } catch (e) {}
     const rawCode = text.trim().toUpperCase();
     const cleanCode = rawCode.replace(/[^A-Z0-9]/g, '');
     const staffRow = db.prepare(`
@@ -2138,6 +2181,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     `).get(rawCode, cleanCode, rawCode) as any;
 
     if (staffRow) {
+      db.prepare("UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE (telegram_chat_id = ? OR telegram_user_id = ?) AND id != ?").run(chatId, tgUserId, staffRow.id);
       db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
       clearBotUserState(db, chatId);
       setBotUserState(db, chatId, tgUserId, null, { active_staff_id: staffRow.id, selected_business_id: staffRow.business_id }, lang);
@@ -2718,14 +2762,16 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     if (text === '📋 Mening navbatim' || text === 'Mening navbatim') {
       if (!biz) return;
       const staffObj = auth.staff || (db.prepare('SELECT * FROM staff WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any);
+      const staffFilterId = staffObj?.id || '';
       const waitingQueue = db.prepare(`
         SELECT q.*, s.name as service_name
         FROM queue_entries q
         LEFT JOIN services s ON q.service_id = s.id
         WHERE q.business_id = ? AND q.status = 'WAITING'
           AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+          AND (? = '' OR q.staff_id = ? OR q.staff_id IS NULL OR q.staff_id = '')
         ORDER BY q.joined_at ASC LIMIT 10
-      `).all(biz.id) as any[];
+      `).all(biz.id, staffFilterId, staffFilterId) as any[];
       const waitingBookings = db.prepare(`
         SELECT b.*, s.name as service_name
         FROM bookings b
@@ -2733,8 +2779,9 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
         WHERE b.business_id = ?
           AND b.booking_date = date('now', '+5 hours')
           AND b.status IN ('CONFIRMED', 'PENDING')
+          AND (? = '' OR b.staff_id = ? OR b.staff_id IS NULL OR b.staff_id = '')
         ORDER BY b.start_time ASC LIMIT 10
-      `).all(biz.id) as any[];
+      `).all(biz.id, staffFilterId, staffFilterId) as any[];
 
       if (waitingQueue.length === 0 && waitingBookings.length === 0) {
         await sendBusinessBotMessage(chatId, `📋 <b>${staffObj?.name || biz.name}</b> uchun hozircha kutayotgan navbatlar yo‘q.`);
@@ -2806,7 +2853,7 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
           AND (b.staff_id = ? OR b.staff_id IS NULL OR b.staff_id = '')
         ORDER BY b.start_time ASC LIMIT 10
       `).all(biz.id, staffObj.id) as any[]) : [];
-      if (bList.length === 0) {
+      if (bList.length === 0 && !staffObj) {
         bList = db.prepare(`
           SELECT b.*, s.name as service_name, st.name as staff_name
           FROM bookings b
@@ -2864,24 +2911,27 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     if (text === '📊 Mening hisobotim' || text === 'Mening hisobotim') {
       if (!biz) return;
       const staffObj = auth.staff || (db.prepare('SELECT * FROM staff WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any);
+      const staffFilterId = staffObj?.id || '';
       const completedQueue = db.prepare(`
         SELECT count(*) as count, COALESCE(sum(s.price_uzs), 0) as total_sum
         FROM queue_entries q
         LEFT JOIN services s ON q.service_id = s.id
         WHERE q.business_id = ?
+          AND (? = '' OR q.staff_id = ?)
           AND q.status = 'COMPLETED'
           AND (date(q.completed_at, '+5 hours') = date('now', '+5 hours') OR date(q.joined_at, '+5 hours') = date('now', '+5 hours'))
-      `).get(biz.id) as any;
+      `).get(biz.id, staffFilterId, staffFilterId) as any;
       const completedBkg = db.prepare(`
         SELECT count(*) as count, COALESCE(sum(b.total_price_uzs), 0) as total_sum
         FROM bookings b
         WHERE b.business_id = ?
+          AND (? = '' OR b.staff_id = ?)
           AND b.status = 'COMPLETED'
           AND b.booking_date = date('now', '+5 hours')
           AND ('qe-bkg-' || substr(b.id, 1, 10)) NOT IN (
             SELECT id FROM queue_entries WHERE business_id = ? AND status = 'COMPLETED'
           )
-      `).get(biz.id, biz.id) as any;
+      `).get(biz.id, staffFilterId, staffFilterId, biz.id) as any;
       const totalCount = Number(completedQueue?.count || 0) + Number(completedBkg?.count || 0);
       const totalSum = Number(completedQueue?.total_sum || 0) + Number(completedBkg?.total_sum || 0);
 
@@ -2989,7 +3039,27 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       text === '/current'
     ) {
       if (!biz) return;
-      let currentServing = db.prepare(`
+      const activeStaffId = auth.staff?.id || '';
+      let currentServing = activeStaffId
+        ? (db.prepare(`
+            SELECT q.*, s.name as service_name
+            FROM queue_entries q
+            LEFT JOIN services s ON q.service_id = s.id
+            WHERE q.business_id = ? AND q.staff_id = ? AND q.status IN ('SERVING', 'CALLED', 'IN_SERVICE')
+              AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+            ORDER BY q.called_at DESC, q.joined_at DESC
+            LIMIT 1
+          `).get(biz.id, activeStaffId) as any)
+        : (db.prepare(`
+            SELECT q.*, s.name as service_name
+            FROM queue_entries q
+            LEFT JOIN services s ON q.service_id = s.id
+            WHERE q.business_id = ? AND q.status IN ('SERVING', 'CALLED', 'IN_SERVICE')
+              AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+            ORDER BY q.called_at DESC, q.joined_at DESC
+            LIMIT 1
+          `).get(biz.id) as any);
+      if (false) currentServing = db.prepare(`
         SELECT q.*, s.name as service_name
         FROM queue_entries q
         LEFT JOIN services s ON q.service_id = s.id
@@ -3000,7 +3070,26 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       `).get(biz.id) as any;
 
       if (!currentServing) {
-        const inServiceBooking = db.prepare(`
+        const inServiceBooking = activeStaffId
+          ? (db.prepare(`
+              SELECT b.*, s.name as service_name
+              FROM bookings b
+              LEFT JOIN services s ON b.service_id = s.id
+              WHERE b.business_id = ? AND b.staff_id = ? AND b.status IN ('IN_PROGRESS', 'IN_SERVICE')
+                AND b.booking_date = date('now', '+5 hours')
+              ORDER BY b.created_at DESC, b.start_time ASC
+              LIMIT 1
+            `).get(biz.id, activeStaffId) as any)
+          : (db.prepare(`
+              SELECT b.*, s.name as service_name
+              FROM bookings b
+              LEFT JOIN services s ON b.service_id = s.id
+              WHERE b.business_id = ? AND b.status IN ('IN_PROGRESS', 'IN_SERVICE')
+                AND b.booking_date = date('now', '+5 hours')
+              ORDER BY b.created_at DESC, b.start_time ASC
+              LIMIT 1
+            `).get(biz.id) as any);
+        if (false) db.prepare(`
           SELECT b.*, s.name as service_name
           FROM bookings b
           LEFT JOIN services s ON b.service_id = s.id
@@ -3922,7 +4011,7 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
       return;
     }
-    const res = executeCallNextCustomerInBot(db, bizId, auth.user?.id, cbUserId);
+    const res = executeCallNextCustomerInBot(db, bizId, auth.user?.id, cbUserId, auth.staff?.id);
     if (!res.success || !res.entry) {
       await sendBusinessBotMessage(cbChatId, `ℹ️ ${res.message || 'Hozircha navbatda kutayotgan mijozlar yo‘q.'}`);
       return;
@@ -3958,7 +4047,7 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
       return;
     }
 
-    const res = executeCallNextCustomerInBot(db, bizId, auth.user?.id, cbUserId);
+    const res = executeCallNextCustomerInBot(db, bizId, auth.user?.id, cbUserId, auth.staff?.id);
     if (!res.success || !res.entry) {
       await sendBusinessBotMessage(cbChatId, `ℹ️ ${res.message || 'Hozircha navbatda kutayotgan mijozlar yo‘q.'}`);
       return;

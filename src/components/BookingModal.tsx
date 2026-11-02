@@ -61,6 +61,32 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [customerName, setCustomerName] = useState<string>(currentUser?.name || '');
   const [customerPhone, setCustomerPhone] = useState<string>(currentUser?.phone || '+998');
 
+  // Auto-populate customer details from currentUser, Telegram WebApp, or localStorage
+  useEffect(() => {
+    const tgUser = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initDataUnsafe?.user) || null;
+    const tgFullName = tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') : '';
+
+    if (!customerName || customerName === 'Guest User' || customerName === 'Mijoz') {
+      if (currentUser?.name && currentUser.name !== 'Guest User' && currentUser.name !== 'Mijoz') {
+        setCustomerName(currentUser.name);
+      } else if (tgFullName) {
+        setCustomerName(tgFullName);
+      } else {
+        const saved = typeof window !== 'undefined' ? localStorage.getItem('navbatbor_customer_name') : null;
+        if (saved) setCustomerName(saved);
+      }
+    }
+
+    if (!customerPhone || customerPhone === '+998') {
+      if (currentUser?.phone) {
+        setCustomerPhone(currentUser.phone);
+      } else {
+        const savedPhone = typeof window !== 'undefined' ? localStorage.getItem('navbatbor_customer_phone') : null;
+        if (savedPhone) setCustomerPhone(savedPhone);
+      }
+    }
+  }, [currentUser]);
+
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [bookedResult, setBookedResult] = useState<any | null>(null);
@@ -207,12 +233,29 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       return;
     }
 
+    const trimmedName = customerName.trim();
+    if (!trimmedName || trimmedName.length < 3) {
+      setErrorMessage('Iltimos, haqiqiy ism va familiyangizni kiriting (kamida 3 ta harf).');
+      return;
+    }
+
     const digitsOnly = customerPhone.replace(/\D/g, '');
     if (digitsOnly.length < 9) {
       setErrorMessage('Iltimos, telefon raqamingizni to‘liq kiriting (masalan: +998 90 123 45 67)');
       return;
     }
-    const cleanPhone = '+998' + digitsOnly.slice(-9);
+    const last9 = digitsOnly.slice(-9);
+    const validCodes = ['90', '91', '93', '94', '95', '97', '98', '99', '88', '33', '77', '20', '50'];
+    if (!validCodes.includes(last9.slice(0, 2))) {
+      setErrorMessage('Iltimos, O‘zbekiston mobil raqamini kiriting (90, 91, 93, 94, 95, 97, 98, 99, 88, 33, 77, 20, 50).');
+      return;
+    }
+    const cleanPhone = '+998' + last9;
+
+    try {
+      localStorage.setItem('navbatbor_customer_name', trimmedName);
+      localStorage.setItem('navbatbor_customer_phone', cleanPhone);
+    } catch(e) {}
 
     setSubmitting(true);
     setErrorMessage(null);
@@ -656,14 +699,22 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
             {/* 4. Mijoz ma'lumotlari */}
             <div className="space-y-2 pt-2 border-t border-slate-100">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                4. {lang === 'uz' ? 'ISM, FAMILIYA VA TELEFON RAQAMI' : `${t('full_name')} & ${t('phone_number')}`}
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  4. {lang === 'uz' ? 'ISM, FAMILIYA VA TELEFON RAQAMI' : `${t('full_name')} & ${t('phone_number')}`}
+                </label>
+                {(currentUser || (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initDataUnsafe?.user)) && (
+                  <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Tasdiqlangan hisob
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <input
                   type="text"
                   id="booking-customer-name"
-                  placeholder={t('full_name')}
+                  placeholder={t('full_name') || 'Ism Familiya'}
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   required
@@ -674,11 +725,21 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   id="booking-customer-phone"
                   placeholder="+998901234567"
                   value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val.startsWith('+998') && !val.startsWith('+')) {
+                      setCustomerPhone('+998' + val.replace(/\D/g, ''));
+                    } else {
+                      setCustomerPhone(val);
+                    }
+                  }}
                   required
                   className="text-xs border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
+              <p className="text-[10px] text-slate-400">
+                ℹ️ Ushbu telefon raqamiga va Telegram profilingizga bron tasdiqnomasining cheki yuboriladi.
+              </p>
             </div>
 
             {/* Submit button */}

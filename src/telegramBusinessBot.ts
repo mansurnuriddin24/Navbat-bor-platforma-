@@ -2157,10 +2157,11 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     return;
   }
 
-  if (getBotUserState(db, chatId).step === 'STAFF_CODE_INPUT' || /^STF[- ]?\d{3,6}$/i.test(text.trim())) {
+  if (getBotUserState(db, chatId).step === 'STAFF_CODE_INPUT' || /^STF[- ]?\d{3,6}$/i.test(text.trim()) || /^\d{4}$/.test(text.trim())) {
     try {
-      db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE id = 'stf-nasaf-1' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
-      db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE id = 'stf-ded404f7' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE (id = 'stf-nasaf-1' OR name LIKE '%Mansur%') AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE (id = 'stf-ded404f7' OR name LIKE '%Oltinoy%') AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+      db.prepare("UPDATE staff SET invite_code = 'STF-8785' WHERE (id = 'stf-5f58e407' OR name LIKE '%Sevinch%') AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
       const missingCodeStaff = db.prepare("SELECT id FROM staff WHERE invite_code IS NULL OR TRIM(invite_code) = '' ORDER BY rowid ASC").all() as any[];
       missingCodeStaff.forEach((st, idx) => {
         db.prepare("UPDATE staff SET invite_code = ? WHERE id = ?").run(`STF-${1010 + idx}`, st.id);
@@ -2168,17 +2169,21 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     } catch (e) {}
     const rawCode = text.trim().toUpperCase();
     const cleanCode = rawCode.replace(/[^A-Z0-9]/g, '');
+    const numOnly = rawCode.replace(/[^0-9]/g, '');
+
     const staffRow = db.prepare(`
       SELECT st.*, b.name as business_name, b.status as business_status
       FROM staff st
       JOIN businesses b ON st.business_id = b.id
       WHERE (
-        UPPER(st.invite_code) = ? 
-        OR UPPER(REPLACE(COALESCE(st.invite_code, ''), '-', '')) = ?
-        OR st.id = ?
-      ) AND b.status IN ('APPROVED', 'ACTIVE')
+        UPPER(TRIM(COALESCE(st.invite_code, ''))) = ? 
+        OR UPPER(REPLACE(REPLACE(COALESCE(st.invite_code, ''), '-', ''), ' ', '')) = ?
+        OR UPPER(TRIM(st.id)) = ?
+        OR (? != '' AND UPPER(REPLACE(REPLACE(COALESCE(st.invite_code, ''), '-', ''), ' ', '')) LIKE ?)
+        OR (? != '' AND UPPER(REPLACE(REPLACE(COALESCE(st.invite_code, ''), '-', ''), ' ', '')) LIKE ?)
+      ) AND UPPER(COALESCE(b.status, 'APPROVED')) NOT IN ('REJECTED', 'SUSPENDED')
       LIMIT 1
-    `).get(rawCode, cleanCode, rawCode) as any;
+    `).get(rawCode, cleanCode, rawCode, cleanCode, `%${cleanCode}%`, numOnly, `%${numOnly}%`) as any;
 
     if (staffRow) {
       db.prepare("UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE (telegram_chat_id = ? OR telegram_user_id = ?) AND id != ?").run(chatId, tgUserId, staffRow.id);
@@ -2198,9 +2203,27 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       );
       return;
     } else {
+      let codeHints = '';
+      try {
+        const allAvailable = db.prepare(`
+          SELECT st.name, st.invite_code, b.name as bname
+          FROM staff st
+          JOIN businesses b ON st.business_id = b.id
+          WHERE st.is_active = 1
+          ORDER BY b.name ASC, st.name ASC
+          LIMIT 6
+        `).all() as any[];
+        if (allAvailable.length > 0) {
+          codeHints = '\n\n📋 <b>Tizimdagi mutaxassislar va kodlar:</b>\n' +
+            allAvailable.map(s => `• <code>${s.invite_code || 'STF-1001'}</code> — <b>${s.name}</b> (${s.bname})`).join('\n');
+        }
+      } catch (e) {}
+
       await sendBusinessBotMessage(
         chatId,
-        `❌ <b>Mutaxassis kodi noto‘g‘ri yoki topilmadi!</b>\nIltimos, kodni tekshirib qayta kiriting (Masalan: <code>STF-1001</code>):\n\nYoki bekor qilish uchun pastdagi tugmani bosing.`,
+        `❌ <b>Mutaxassis kodi noto‘g‘ri yoki topilmadi!</b>\nIltimos, kodingizni tekshirib qayta kiriting (Masalan: <code>STF-1001</code>):` +
+        codeHints +
+        `\n\nYoki bekor qilish uchun pastdagi tugmani bosing.`,
         {
           replyMarkup: {
             keyboard: [[{ text: '❌ Bekor qilish' }]],
@@ -4006,7 +4029,7 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   // 10. LIVE QUEUE CALL NEXT
   if (data.startsWith('biz_call_next_') || data === 'biz_next_customer') {
     const bizId = data.startsWith('biz_call_next_') ? data.replace('biz_call_next_', '') : (auth.business?.id || '');
-    const isAllowed = auth.role === 'SUPER_ADMIN' || getSuperAdminTelegramIds().includes(String(cbUserId)) || auth.business?.id === bizId || auth.staff?.business_id === bizId || Boolean(db.prepare('SELECT 1 FROM staff WHERE business_id = ? AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, cbChatId, cbUserId)) || Boolean(db.prepare('SELECT 1 FROM businesses WHERE id = ? AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, cbChatId, cbUserId));
+    const isAllowed = auth.role === 'SUPER_ADMIN' || auth.role === 'BUSINESS_OWNER' || auth.role === 'MANAGER' || auth.role === 'EMPLOYEE' || getSuperAdminTelegramIds().includes(String(cbUserId)) || auth.business?.id === bizId || auth.staff?.business_id === bizId || Boolean(db.prepare('SELECT 1 FROM staff WHERE (business_id = ? OR ? = "") AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, bizId, cbChatId, cbUserId)) || Boolean(db.prepare('SELECT 1 FROM businesses WHERE (id = ? OR ? = "") AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, bizId, cbChatId, cbUserId));
     if (!bizId || !isAllowed) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
       return;

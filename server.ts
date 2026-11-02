@@ -1195,7 +1195,7 @@ async function sendTelegramAlert(options: TelegramAlertOptions): Promise<{ succe
   const { chatId, message, recipientType = 'SYSTEM', recipientId = null, botToken, replyMarkup } = options;
   const defaultBusinessToken = getSetting('telegram_business_bot_token') || process.env.BUSINESS_BOT_TOKEN || process.env.TELEGRAM_BUSINESS_BOT_TOKEN;
   const defaultCustomerToken = getSetting('telegram_bot_token') || process.env.TELEGRAM_BOT_TOKEN;
-  const token = botToken || defaultCustomerToken;
+  const token = botToken || (recipientType === 'BUSINESS' ? (defaultBusinessToken || defaultCustomerToken) : (defaultCustomerToken || defaultBusinessToken));
   const targetChatId = chatId || getSetting('telegram_admin_chat_id') || process.env.TELEGRAM_ADMIN_CHAT_ID;
   const logId = 'tg-' + crypto.randomUUID().slice(0, 10);
 
@@ -1665,22 +1665,33 @@ function resolveCustomerTelegramChatId(entry: { id?: string; customer_id?: strin
     }
   }
 
-  // 2. From users table by phone number matching
+  // 2. From users table & telegram_logs by phone number matching
   if (entry.customer_phone) {
     const rawPhone = entry.customer_phone.replace(/[^0-9]/g, '');
     if (rawPhone.length >= 7) {
-      const match = db.prepare('SELECT telegram_chat_id FROM users WHERE telegram_chat_id IS NOT NULL AND phone LIKE ? LIMIT 1')
-        .get(`%${rawPhone.slice(-9)}%`) as any;
+      const last9 = rawPhone.slice(-9);
+      const match = db.prepare('SELECT telegram_chat_id FROM users WHERE telegram_chat_id IS NOT NULL AND telegram_chat_id != "" AND (phone LIKE ? OR phone LIKE ?) ORDER BY created_at DESC LIMIT 1')
+        .get(`%${last9}%`, `%+998${last9}%`) as any;
       if (match?.telegram_chat_id && String(match.telegram_chat_id).trim()) {
         const cid = String(match.telegram_chat_id).trim();
         if (entry.id) {
           db.prepare('UPDATE queue_entries SET telegram_chat_id = ? WHERE id = ?').run(cid, entry.id);
         }
         if (entry.customer_id) {
-          db.prepare('UPDATE users SET telegram_chat_id = ? WHERE id = ?').run(cid, entry.customer_id);
+          db.prepare('UPDATE users SET telegram_chat_id = COALESCE(telegram_chat_id, ?) WHERE id = ?').run(cid, entry.customer_id);
         }
         return cid;
       }
+      try {
+        const logMatch = db.prepare("SELECT chat_id FROM telegram_logs WHERE (phone LIKE ? OR message LIKE ?) AND chat_id IS NOT NULL AND chat_id != '' ORDER BY created_at DESC LIMIT 1")
+          .get(`%${last9}%`, `%${last9}%`) as any;
+        if (logMatch?.chat_id && String(logMatch.chat_id).trim()) {
+          const cid = String(logMatch.chat_id).trim();
+          if (entry.id) db.prepare('UPDATE queue_entries SET telegram_chat_id = ? WHERE id = ?').run(cid, entry.id);
+          if (entry.customer_id) db.prepare('UPDATE users SET telegram_chat_id = COALESCE(telegram_chat_id, ?) WHERE id = ?').run(cid, entry.customer_id);
+          return cid;
+        }
+      } catch (e) {}
     }
   }
 
@@ -5174,8 +5185,8 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
     }
   }
 
-  // Ensure target customer exists in users table to satisfy foreign key constraints
-  const userExists = db.prepare('SELECT id FROM users WHERE id = ?').get(targetCustomerId) as any;
+  // Ensure target customer exists and real name & phone are saved permanently
+  const userExists = db.prepare('SELECT id, telegram_chat_id, phone, name FROM users WHERE id = ?').get(targetCustomerId) as any;
   if (!userExists) {
     const guestEmail = `guest_${targetCustomerId}@navbatbor.uz`;
     const passHash = hashPassword(crypto.randomBytes(16).toString('hex'));
@@ -5183,6 +5194,15 @@ export async function executeCreateBookingAtomic(params: CreateBookingParams): P
       INSERT INTO users (id, name, email, phone, password_hash, role, status)
       VALUES (?, ?, ?, ?, ?, 'CUSTOMER', 'ACTIVE')
     `).run(targetCustomerId, finalCustName, guestEmail, finalCustPhone || null, passHash);
+  } else {
+    try {
+      db.prepare(`
+        UPDATE users 
+        SET name = CASE WHEN name IS NULL OR name = '' OR name = 'Guest User' OR name = 'Mijoz' THEN ? ELSE COALESCE(?, name) END,
+            phone = COALESCE(?, phone)
+        WHERE id = ?
+      `).run(finalCustName, finalCustName, finalCustPhone || null, targetCustomerId);
+    } catch(e) {}
   }
 
   const creatorId = created_by_user_id || targetCustomerId;
@@ -9221,12 +9241,6 @@ function getCustomerKeyboard(userRole?: string, hasBusiness?: boolean) {
     [{ text: '⭐ Sevimlilar' }, { text: '🔔 Bildirishnomalar' }],
     [{ text: '👤 Profilim' }, { text: 'ℹ️ Yordam' }]
   ];
-  if (hasBusiness || ['ADMIN', 'SUPER_ADMIN', 'FOUNDER', 'BUSINESS_OWNER', 'OWNER', 'STAFF', 'EMPLOYEE'].includes(userRole || '')) {
-    keyboard.push([{ text: '🏢 Biznes rejimiga o‘tish' }]);
-  }
-  if (['ADMIN', 'SUPER_ADMIN', 'FOUNDER'].includes(userRole || '')) {
-    keyboard.push([{ text: '👑 Admin rejimiga o‘tish' }]);
-  }
   return { keyboard, resize_keyboard: true };
 }
 
@@ -10897,7 +10911,23 @@ async function processTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
-    if (text === '🏢 Biznes rejimiga o‘tish' || text === '/biznes_rejimi' || text === '/operator') {
+    if (text === '🏢 Biznes rejimiga o‘tish' || text === '/biznes_rejimi' || text === '/operator' || text === '/panel' || text === '🟢 KEYINGI MIJOZNI CHAQIRISH' || text === '👤 Hozirgi mijoz') {
+      await sendTelegramAlert({
+        chatId,
+        recipientType: 'CUSTOMER',
+        message: `🏢 <b>Muassasa boshqaruvi uchun maxsus Biznes Bot:</b>\n━━━━━━━━━━━━━━━━\n` +
+          `Hurmatli hamkor, mijozlar navbatini va bronlarni boshqarish uchun rasmiy Biznes botimizga o‘ting:\n\n` +
+          `👉 <b>@navbatbor_bizness_bot</b>\n\n` +
+          `<i>Ushbu @Navbat1Uzb_bot esa faqat mijozlaringiz navbat olishi va bildirishnomalar olishi uchun xizmat qiladi.</i>`,
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: '🏢 Biznes botga o‘tish (@navbatbor_bizness_bot)', url: 'https://t.me/navbatbor_bizness_bot' }]
+          ]
+        }
+      });
+      return;
+    }
+    if (false && (text === '__unused_biz_switch__')) {
       if (bizInfo) {
         setTelegramUserMode(chatId, 'BUSINESS');
         await sendTelegramBusinessPanel(chatId, bizInfo);

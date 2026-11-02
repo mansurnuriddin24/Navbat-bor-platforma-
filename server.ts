@@ -2227,7 +2227,7 @@ function seedDatabase() {
   // 4. Initial Core Admin & Team Users
   const users = [
     { id: 'usr-admin-jahongir', name: 'Jahongir Rasulov', email: 'rasulovjahongir074@gmail.com', phone: '+998901234567', pass: 'admin123', role: 'FOUNDER' },
-    { id: 'usr-admin', name: 'Nuriddinov Mansur (Super Admin)', email: 'mansur@gmail.com', phone: '+998200232540', pass: 'Mansur1105', role: 'SUPER_ADMIN' },
+    { id: 'usr-admin', name: 'Nuriddinov Mansur (Super Admin)', email: 'mansur@gmail.com', phone: '+998200232540', pass: 'Mansur1105', role: 'ADMIN' },
     { id: 'usr-operating-partner-qarshi', name: 'Alisher Qodirov (Qarshi Boshqaruvchi)', email: 'partner@navbatbor.uz', phone: '+998971234567', pass: 'partner123', role: 'OPERATING_PARTNER' },
     { id: 'usr-sales-manager-1', name: 'Bobur Mirzayev (Sotuv Menejeri)', email: 'sales@navbatbor.uz', phone: '+998901112233', pass: 'sales123', role: 'SALES_MANAGER' },
     { id: 'usr-support-1', name: 'Texnik Qo‘llab-quvvatlash Markazi', email: 'support-desk@navbatbor.uz', phone: '+998200232540', pass: 'support123', role: 'SUPPORT' },
@@ -8723,7 +8723,7 @@ function authenticateTelegramUser(tgId: string | null, info: { first_name?: stri
   if (isSuperAdminTg) {
     user = db.prepare("SELECT * FROM users WHERE id = 'usr-admin'").get();
     if (user && tgIdStr) {
-      db.prepare("UPDATE users SET role = 'SUPER_ADMIN', telegram_chat_id = ?, telegram_user_id = ?, telegram_username = COALESCE(?, telegram_username) WHERE id = 'usr-admin'").run(
+      db.prepare("UPDATE users SET role = 'ADMIN', telegram_chat_id = ?, telegram_user_id = ?, telegram_username = COALESCE(?, telegram_username) WHERE id = 'usr-admin'").run(
         tgIdStr,
         tgIdStr,
         info.username ? info.username.replace('@', '') : 'mansur_0511'
@@ -9729,7 +9729,7 @@ async function handleTelegramNextCustomerPrompt(chatId: string, telegramUserId: 
 }
 
 // Unified Telegram Update Processor (Used by Webhook & Long Polling)
-async function processTelegramUpdate(update: any): Promise<void> {
+export async function processTelegramUpdate(update: any): Promise<void> {
   if (!update) return;
 
   // Duplicate update protection
@@ -14193,6 +14193,47 @@ app.post('/api/admin/businesses/:id/status', requireAuth, requireRole(['ADMIN', 
   res.json({ success: true });
 });
 
+// Admin: Delete Business with Cascade Clean-up
+app.delete('/api/admin/businesses/:id', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'FOUNDER']), async (req, res) => {
+  const { id } = req.params;
+  const user = (req as any).user;
+
+  const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(id) as any;
+  if (!biz) return res.status(404).json({ error: 'Biznes topilmadi' });
+
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    // Cascade delete all business relations safely
+    db.prepare('DELETE FROM reviews WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM bookings WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM queue_entries WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM pending_queue_actions WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM staff_services WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ?)').run(id);
+    db.prepare('DELETE FROM staff_hours WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ?)').run(id);
+    db.prepare('DELETE FROM staff WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM services WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM business_hours WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM business_memberships WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM business_screens WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM business_applications WHERE created_business_id = ? OR id = ?').run(id, id);
+    db.prepare('DELETE FROM ad_promotions WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM saved_businesses WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM blocked_times WHERE business_id = ?').run(id);
+    db.prepare('DELETE FROM businesses WHERE id = ?').run(id);
+
+    db.exec('COMMIT');
+
+    logAudit(user.id, user.email, 'ADMIN_BUSINESS_DELETED', 'BUSINESS', id, `Biznes o‘chirildi: ${biz.name}`);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+
+    res.json({ success: true, message: `"${biz.name}" muassasasi muvaffaqiyatli o‘chirildi` });
+  } catch (err: any) {
+    try { db.exec('ROLLBACK'); } catch(e){}
+    console.error('[Delete Business Error]:', err);
+    res.status(500).json({ error: 'Biznesni o‘chirishda xatolik yuz berdi: ' + (err.message || 'Noma’lum xatolik') });
+  }
+});
+
 // Admin: All Queues
 app.get('/api/admin/queues', requireAuth, requireRole(['ADMIN']), (req, res) => {
   const queues = db.prepare(`
@@ -16944,4 +16985,6 @@ async function syncTelegramBotProfiles() {
   }
 }
 
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}

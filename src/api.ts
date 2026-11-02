@@ -395,6 +395,7 @@ export const api = {
   getAdminCharts: () => request<any>('/api/admin/stats-charts'),
   getAdminBusinesses: () => request<any[]>('/api/admin/businesses'),
   createAdminBusiness: (data: any) => request<any>('/api/admin/businesses', { method: 'POST', body: JSON.stringify(data) }),
+  deleteAdminBusiness: (id: string) => request<any>(`/api/admin/businesses/${id}`, { method: 'DELETE' }),
   acceptBusinessInvitation: (token: string) => request<any>(`/api/invitations/${token}/accept`, { method: 'POST' }),
   updateAdminBusinessStatus: (id: string, data: { status?: string; is_verified?: boolean; reason?: string }) =>
     request<any>(`/api/admin/businesses/${id}/status`, { method: 'POST', body: JSON.stringify(data) }),

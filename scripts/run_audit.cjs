@@ -141,7 +141,8 @@ try {
   const superAdmins = users.filter(u => u.role === 'SUPER_ADMIN' || u.role === 'ADMIN');
   assert(superAdmins.length >= 1, 'Tizimda Super Admin foydalanuvchisi mavjudligi');
 
-  const nasafOwner = users.find(u => u.phone === '+998908862540' || u.email === 'mansurnuriddin24@gmail.com');
+  const nasafBiz = db.prepare('SELECT owner_id FROM businesses WHERE id = ?').get('biz-nasaf-dental');
+  const nasafOwner = users.find(u => u.id === nasafBiz?.owner_id);
   assert(nasafOwner !== undefined && nasafOwner.role === 'BUSINESS_OWNER', '"Nasaf dental" egasining roli BUSINESS_OWNER ekanligi');
 
   // Verify that unauthorized users cannot claim business ownership

@@ -223,6 +223,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
     }
   };
 
+  const handleDeleteBusiness = async (id: string, name: string) => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        if (!window.confirm(`Haqiqatan ham "${name}" muassasasini butunlay o‘chirib tashlamoqchimisiz?\n\nDiqqat: Ushbu biznesga tegishli barcha xodimlar, xizmatlar va navbatlar ham o‘chiriladi!`)) {
+          return;
+        }
+      }
+    } catch {}
+
+    setActionLoading(id);
+    try {
+      await api.deleteAdminBusiness(id);
+      setBusinesses(prev => prev.filter(b => b.id !== id));
+      if (inspectBusiness?.id === id) setInspectBusiness(null);
+      const ov = await api.getAdminOverview();
+      setOverview(ov);
+      showToast(`"${name}" muassasasi muvaffaqiyatli o‘chirildi!`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Xatolik yuz berdi', 'error');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleInspectBusiness = async (b: any) => {
     setInspectLoading(true);
     try {
@@ -1652,6 +1676,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                       >
                         +1 oy
                       </button>
+
+                      <button
+                        onClick={() => handleDeleteBusiness(b.id, b.name)}
+                        disabled={actionLoading === b.id}
+                        className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-lg transition text-[11px] cursor-pointer inline-flex items-center gap-1"
+                        title="Muassasani butunlay o‘chirish"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>O‘chirish</span>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -2871,6 +2905,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onSwitchToPartner }) => 
                   Holat: <span className="uppercase text-slate-800">{inspectBusiness.status}</span>
                 </span>
               )}
+              <button
+                onClick={() => handleDeleteBusiness(inspectBusiness.id, inspectBusiness.name)}
+                disabled={actionLoading === inspectBusiness.id}
+                className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl text-xs transition cursor-pointer inline-flex items-center gap-1.5"
+                title="Muassasani tizimdan butunlay o‘chirish"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>O‘chirish</span>
+              </button>
               <button
                 onClick={() => setInspectBusiness(null)}
                 className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition cursor-pointer"

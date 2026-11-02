@@ -37,7 +37,8 @@ import {
 import {
   restoreDatabaseFromCloud,
   performCloudDatabaseBackup,
-  scheduleCloudDatabaseBackup
+  scheduleCloudDatabaseBackup,
+  importDatabaseSnapshot
 } from './src/cloudPersistence.ts';
 
 // --- DATABASE INITIALIZATION ---
@@ -2103,6 +2104,13 @@ function hashPassword(password: string): string {
 
 // --- SEED INITIAL DATA IF EMPTY ---
 function seedDatabase() {
+  try {
+    const snapPath = path.join(process.cwd(), 'data', 'cloud-snapshot.json');
+    if (fs.existsSync(snapPath)) {
+      const parsed = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
+      if (parsed?.tables) importDatabaseSnapshot(db, parsed.tables);
+    }
+  } catch (e) {}
   // Check if we need to migrate/re-seed for Qarshi pilot
   const hasOldSeed = db.prepare("SELECT count(*) as count FROM businesses WHERE city_id = 'city-toshkent'").get() as { count: number };
   if (hasOldSeed && hasOldSeed.count > 0) {
@@ -2294,6 +2302,8 @@ function seedDatabase() {
     }
 
     const bizId = 'biz-nasaf-dental';
+    const existingNasafBiz = db.prepare("SELECT id FROM businesses WHERE id = 'biz-nasaf-dental'").get();
+    if (!existingNasafBiz) {
 
     // Insert or update Nasaf dental
     db.prepare(`
@@ -2367,7 +2377,8 @@ function seedDatabase() {
     db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-nasaf-1', 'srv-nasaf-1')`).run();
 
     // Ensure Queen_Salon exists (if not already present) so it is preserved across restarts
-    const queenBizId = 'biz-queen-salon';
+    }
+    if (false) { const queenBizId = 'biz-queen-salon';
     db.prepare(`
       INSERT OR IGNORE INTO businesses (
         id, owner_id, name, slug, category_id, city_id, district, address, phone, description,
@@ -2395,7 +2406,8 @@ function seedDatabase() {
       INSERT OR IGNORE INTO staff (id, business_id, name, title, phone, is_active, invite_code, experience_years, rating)
       VALUES ('stf-queen-1', ?, 'Bosh mutaxassis', 'Go‘zallik ustasi', '+998908862540', 1, 'STF-2001', 5, 5.0)
     `).run(queenBizId);
-    db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-queen-1', 'srv-queen-1')`).run();
+    db.prepare(`INSERT OR IGNORE INTO staff_services (staff_id, service_id) VALUES ('stf-queen-1', 'srv-queen-1')`).run(); }
+    db.prepare("DELETE FROM businesses WHERE id = 'biz-queen-salon'").run();
 
     // Nasaf dental application record marked APPROVED
     db.prepare(`

@@ -123,7 +123,13 @@ export function importDatabaseSnapshot(db: DatabaseSync, snapshot: Record<string
         }
         if (
           table === 'businesses' &&
-          String(row.id || '').startsWith('biz-test-')
+          (String(row.id || '').startsWith('biz-test-') || row.id === 'biz-queen-salon')
+        ) {
+          continue;
+        }
+        if (
+          (table === 'services' || table === 'staff' || table === 'business_memberships' || table === 'business_hours') &&
+          row.business_id === 'biz-queen-salon'
         ) {
           continue;
         }

@@ -8,6 +8,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
+import { scheduleCloudDatabaseBackup } from './cloudPersistence.js';
 
 export type BusinessBotRole = 'SUPER_ADMIN' | 'BUSINESS_OWNER' | 'MANAGER' | 'EMPLOYEE' | 'PENDING_APPLICANT' | 'REJECTED_APPLICANT' | 'BLOCKED' | 'GUEST';
 export type BotLanguage = 'uz' | 'ru';
@@ -418,6 +419,22 @@ export function initBusinessBotDatabase(db: DatabaseSync): void {
 
   try { db.exec("ALTER TABLE staff ADD COLUMN invite_code TEXT;"); } catch(e) {}
   try { db.exec("ALTER TABLE staff_services ADD COLUMN custom_price_uzs INTEGER;"); } catch(e) {}
+  try {
+    db.prepare("UPDATE staff SET invite_code = 'STF-1001' WHERE id = 'stf-nasaf-1' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+    db.prepare("UPDATE staff SET invite_code = 'STF-1002' WHERE id = 'stf-ded404f7' AND (invite_code IS NULL OR TRIM(invite_code) = '')").run();
+    const missingCodeStaff = db.prepare("SELECT id FROM staff WHERE invite_code IS NULL OR TRIM(invite_code) = '' ORDER BY rowid ASC").all() as any[];
+    missingCodeStaff.forEach((st, idx) => {
+      const code = `STF-${1010 + idx}`;
+      db.prepare("UPDATE staff SET invite_code = ? WHERE id = ?").run(code, st.id);
+    });
+    db.exec(`
+      INSERT OR IGNORE INTO staff_services (staff_id, service_id)
+      SELECT st.id, s.id
+      FROM staff st
+      JOIN services s ON st.business_id = s.business_id
+      WHERE st.is_active = 1 AND s.is_active = 1;
+    `);
+  } catch (e) {}
 }
 
 // ========================================================
@@ -544,6 +561,36 @@ export function getBusinessBotUserAuth(db: DatabaseSync, telegramUserId: string,
     `).get(idStr) as any;
     if (blockedApp) {
       return { role: 'BLOCKED', pendingApplication: blockedApp, permissions: [], language };
+    }
+  } catch (e) {}
+
+  // 2b. Explicit Active Specialist Session (when logged in via Mutaxassis kodi)
+  try {
+    const stateRow = db.prepare('SELECT state_data_json FROM business_bot_user_states WHERE chat_id = ?').get(cId) as any;
+    if (stateRow?.state_data_json) {
+      const parsed = JSON.parse(stateRow.state_data_json);
+      if (parsed.active_staff_id) {
+        const activeStaff = db.prepare(`
+          SELECT st.*, b.name as business_name, b.slug as business_slug, b.status as business_status,
+                 u.id as staff_user_id, u.role as user_role, u.name as staff_user_name
+          FROM staff st
+          JOIN businesses b ON st.business_id = b.id
+          LEFT JOIN users u ON st.user_id = u.id
+          WHERE st.id = ? AND st.is_active = 1 AND b.status IN ('APPROVED', 'ACTIVE')
+          LIMIT 1
+        `).get(parsed.active_staff_id) as any;
+        if (activeStaff) {
+          const bizObj = db.prepare('SELECT * FROM businesses WHERE id = ?').get(activeStaff.business_id) as any;
+          return {
+            role: 'EMPLOYEE',
+            business: bizObj,
+            staff: activeStaff,
+            user: { id: activeStaff.staff_user_id || 'usr-admin', name: activeStaff.staff_user_name || activeStaff.name },
+            permissions: ['ALL', 'CALL_NEXT_CUSTOMER', 'VIEW_QUEUE', 'ADD_WALKIN', 'VIEW_STATISTICS', 'VIEW_BOOKINGS', 'VIEW_CUSTOMERS', 'VIEW_SERVICES', 'VIEW_STAFF'],
+            language
+          };
+        }
+      }
     }
   } catch (e) {}
 
@@ -828,7 +875,16 @@ export function getBotUserState(db: DatabaseSync, chatId: string): { step: strin
 export function setBotUserState(db: DatabaseSync, chatId: string, telegramUserId: string, step: string | null, data?: any, lang?: BotLanguage): void {
   try {
     const current = getBotUserState(db, chatId);
-    const finalData = data !== undefined ? data : current.data;
+    let finalData = data !== undefined ? { ...data } : { ...(current.data || {}) };
+    if (data !== undefined) {
+      if (current.data?.selected_business_id && finalData.selected_business_id === undefined) {
+        finalData.selected_business_id = current.data.selected_business_id;
+      }
+      if (current.data?.active_staff_id && finalData.active_staff_id === undefined) {
+        finalData.active_staff_id = current.data.active_staff_id;
+      }
+      if (finalData.active_staff_id === null) delete finalData.active_staff_id;
+    }
     const finalLang = lang || current.lang || 'uz';
 
     db.prepare(`
@@ -846,7 +902,28 @@ export function setBotUserState(db: DatabaseSync, chatId: string, telegramUserId
   }
 }
 
-export function clearBotUserState(db: DatabaseSync, chatId: string): void {
+export function clearBotUserState(db: DatabaseSync, chatId: string, fullReset = false): void {
+  try {
+    if (fullReset) {
+      db.prepare(`
+        UPDATE business_bot_user_states 
+        SET step = NULL, state_data_json = '{}', updated_at = CURRENT_TIMESTAMP
+        WHERE chat_id = ?
+      `).run(chatId);
+      return;
+    }
+    const current = getBotUserState(db, chatId);
+    const preserved: Record<string, any> = {};
+    if (current.data?.selected_business_id) preserved.selected_business_id = current.data.selected_business_id;
+    if (current.data?.active_staff_id) preserved.active_staff_id = current.data.active_staff_id;
+    db.prepare(`
+      UPDATE business_bot_user_states 
+      SET step = NULL, state_data_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE chat_id = ?
+    `).run(JSON.stringify(preserved), chatId);
+  } catch (e) {}
+}
+export function _unusedClearStub(db: DatabaseSync, chatId: string): void {
   try {
     db.prepare(`
       UPDATE business_bot_user_states 
@@ -1262,6 +1339,16 @@ export function executeCallNextCustomerInBot(
           )
         ORDER BY q.joined_at ASC LIMIT 1
       `).get(businessId, targetStaffId, targetStaffId) as any;
+      if (!nextWaiting) {
+        nextWaiting = db.prepare(`
+          SELECT q.*, s.name as service_name
+          FROM queue_entries q
+          LEFT JOIN services s ON q.service_id = s.id
+          WHERE q.business_id = ? AND q.status = 'WAITING'
+            AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+          ORDER BY CASE WHEN q.staff_id = ? THEN 0 WHEN (q.staff_id IS NULL OR q.staff_id = '') THEN 1 ELSE 2 END ASC, q.joined_at ASC LIMIT 1
+        `).get(businessId, targetStaffId) as any;
+      }
     } else {
       nextWaiting = db.prepare(`
         SELECT q.*, s.name as service_name
@@ -1295,6 +1382,19 @@ export function executeCallNextCustomerInBot(
           ORDER BY b.start_time ASC
           LIMIT 1
         `).get(businessId, targetStaffId, targetStaffId) as any;
+        if (!nextBooking) {
+          nextBooking = db.prepare(`
+            SELECT b.*, s.name as service_name, st.name as staff_name
+            FROM bookings b
+            LEFT JOIN services s ON b.service_id = s.id
+            LEFT JOIN staff st ON b.staff_id = st.id
+            WHERE b.business_id = ?
+              AND b.booking_date = date('now', '+5 hours')
+              AND b.status IN ('CONFIRMED', 'PENDING')
+            ORDER BY CASE WHEN b.staff_id = ? THEN 0 WHEN (b.staff_id IS NULL OR b.staff_id = '') THEN 1 ELSE 2 END ASC, b.start_time ASC
+            LIMIT 1
+          `).get(businessId, targetStaffId) as any;
+        }
       } else {
         nextBooking = db.prepare(`
           SELECT b.*, s.name as service_name, st.name as staff_name
@@ -1371,6 +1471,7 @@ export function executeCallNextCustomerInBot(
           type: 'QUEUE_CALLED',
           entryId: qEntryId,
           calledCustomer: bookingEntry,
+          ...((scheduleCloudDatabaseBackup(db), {})),
           timestamp: Date.now()
         });
       } catch (e) {
@@ -1436,6 +1537,7 @@ export function executeCallNextCustomerInBot(
       }
     } catch (e) {}
 
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
     return { success: true, entry: updatedEntry, message: 'Mijoz muvaffaqiyatli chaqirildi' };
   } catch (err: any) {
     try { db.exec('ROLLBACK;'); } catch (e) {}
@@ -1945,6 +2047,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     if (staffRow) {
       db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
       clearBotUserState(db, chatId);
+      setBotUserState(db, chatId, tgUserId, null, { active_staff_id: staffRow.id, selected_business_id: staffRow.business_id }, lang);
+      try { scheduleCloudDatabaseBackup(db); } catch (e) {}
       logBusinessBotAudit(db, 'STAFF_LINKED_VIA_CODE', tgUserId, null, staffRow.id, { staff_name: staffRow.name, code: rawCode });
       await sendBusinessBotMessage(
         chatId,
@@ -1968,6 +2072,40 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
 
   // 3b. Staff / Specialist code entry button
   if (text === '🔑 Xodim / Mutaxassis kodi' || text === '🔑 Xodim kodi' || text === '/code' || text === '/staff_login') {
+    setBotUserState(db, chatId, tgUserId, 'STAFF_CODE_INPUT', {}, lang);
+    let extraCodesText = '';
+    const isAdminOrOwner = getSuperAdminTelegramIds().includes(String(tgUserId)) || auth.role === 'SUPER_ADMIN' || auth.role === 'BUSINESS_OWNER';
+    if (isAdminOrOwner) {
+      try {
+        const allStaff = db.prepare(`
+          SELECT st.id, st.name, st.invite_code, b.name as biz_name
+          FROM staff st
+          JOIN businesses b ON st.business_id = b.id
+          WHERE st.is_active = 1 AND b.status IN ('APPROVED', 'ACTIVE')
+          ORDER BY b.name ASC, st.name ASC
+        `).all() as any[];
+        if (allStaff.length > 0) {
+          extraCodesText = `\n\n📋 <b>Mavjud mutaxassis kodlari:</b>\n` +
+            allStaff.map(s => `• <code>${s.invite_code || 'STF-1001'}</code> — <b>${s.name}</b> (${s.biz_name})`).join('\n');
+        }
+      } catch (e) {}
+    }
+    await sendBusinessBotMessage(
+      chatId,
+      `🔑 <b>Mutaxassis taklif kodini kiriting:</b>\n\n` +
+      `Rahbaringiz bergan taklif kodini yuboring (Masalan: <code>STF-1001</code>):\n\n` +
+      `<i>Kodni kiritishingiz bilan tizim sizni o‘z yo‘nalishingiz bo‘yicha mutaxassis sifatida taniydi.</i>` +
+      extraCodesText,
+      {
+        replyMarkup: {
+          keyboard: [[{ text: '❌ Bekor qilish' }]],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+  if (false && text === '__unused_staff_code_btn__') {
     setBotUserState(db, chatId, tgUserId, 'STAFF_CODE_INPUT', {}, lang);
     await sendBusinessBotMessage(
       chatId,
@@ -2002,6 +2140,8 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
     if (staffRow) {
       db.prepare("UPDATE staff SET telegram_chat_id = ?, telegram_user_id = ?, is_active = 1 WHERE id = ?").run(chatId, tgUserId, staffRow.id);
       clearBotUserState(db, chatId);
+      setBotUserState(db, chatId, tgUserId, null, { active_staff_id: staffRow.id, selected_business_id: staffRow.business_id }, lang);
+      try { scheduleCloudDatabaseBackup(db); } catch (e) {}
       logBusinessBotAudit(db, 'STAFF_LINKED_VIA_CODE', tgUserId, null, staffRow.id, { staff_name: staffRow.name, code: rawCode });
       await sendBusinessBotMessage(
         chatId,
@@ -2031,6 +2171,22 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
   // 3c. Staff Logout
   if (text === '🚪 Chiqish (Hisobdan uzish)' || text === '🚪 Chiqish' || text === '/logout') {
     db.prepare('UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE telegram_chat_id = ? OR telegram_user_id = ?').run(chatId, tgUserId);
+    clearBotUserState(db, chatId, true);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+    const freshAuth = getBusinessBotUserAuth(db, tgUserId, chatId);
+    const guestKb = getGuestKeyboard(lang, false);
+    if (freshAuth.role === 'SUPER_ADMIN' || freshAuth.role === 'BUSINESS_OWNER') {
+      guestKb.keyboard.unshift([{ text: '👑 Asosiy boshqaruv paneliga qaytish' }]);
+    }
+    await sendBusinessBotMessage(
+      chatId,
+      '👋 Mutaxassis hisobidan muvaffaqiyatli chiqdingiz. Yana mutaxassis kodi orqali kirishingiz yoki asosiy panelga qaytishingiz mumkin.',
+      { replyMarkup: guestKb }
+    );
+    return;
+  }
+  if (false && text === '__unused_logout_btn__') {
+    db.prepare('UPDATE staff SET telegram_chat_id = NULL, telegram_user_id = NULL WHERE telegram_chat_id = ? OR telegram_user_id = ?').run(chatId, tgUserId);
     clearBotUserState(db, chatId);
     await sendBusinessBotMessage(
       chatId,
@@ -2041,7 +2197,11 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
   }
 
   // 4. /start command
-  if (text === '/start' || text.startsWith('/start@') || text === '/menu' || text === '/start help') {
+  if (text === '/start' || text.startsWith('/start@') || text === '/menu' || text === '/start help' || text === '👑 Asosiy boshqaruv paneliga qaytish') {
+    setBotUserState(db, chatId, tgUserId, null, { active_staff_id: null }, lang);
+    clearBotUserState(db, chatId);
+    const freshStartAuth = getBusinessBotUserAuth(db, tgUserId, chatId);
+    Object.assign(auth, freshStartAuth);
     clearBotUserState(db, chatId);
 
     if (auth.role === 'SUPER_ADMIN') {
@@ -2555,7 +2715,49 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
 
 
     // Specialist specific menu buttons
-    if (auth.staff && (text === '📋 Mening navbatim' || text === 'Mening navbatim')) {
+    if (text === '📋 Mening navbatim' || text === 'Mening navbatim') {
+      if (!biz) return;
+      const staffObj = auth.staff || (db.prepare('SELECT * FROM staff WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any);
+      const waitingQueue = db.prepare(`
+        SELECT q.*, s.name as service_name
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ? AND q.status = 'WAITING'
+          AND (date(q.joined_at, '+5 hours') = date('now', '+5 hours') OR datetime(q.joined_at) >= datetime('now', '-18 hours'))
+        ORDER BY q.joined_at ASC LIMIT 10
+      `).all(biz.id) as any[];
+      const waitingBookings = db.prepare(`
+        SELECT b.*, s.name as service_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        WHERE b.business_id = ?
+          AND b.booking_date = date('now', '+5 hours')
+          AND b.status IN ('CONFIRMED', 'PENDING')
+        ORDER BY b.start_time ASC LIMIT 10
+      `).all(biz.id) as any[];
+
+      if (waitingQueue.length === 0 && waitingBookings.length === 0) {
+        await sendBusinessBotMessage(chatId, `📋 <b>${staffObj?.name || biz.name}</b> uchun hozircha kutayotgan navbatlar yo‘q.`);
+      } else {
+        let msg = `📋 <b>Kutayotgan mijozlar (${waitingQueue.length + waitingBookings.length} ta):</b>\n━━━━━━━━━━━━━━━━\n`;
+        let idx = 1;
+        waitingQueue.forEach((w) => {
+          msg += `${idx++}. 🎫 <b>#${w.queue_number}</b> — ${w.customer_name} (${w.service_name || 'Xizmat'})\n`;
+        });
+        waitingBookings.forEach((b) => {
+          msg += `${idx++}. 📅 <b>#${b.booking_number} (${b.start_time})</b> — ${b.customer_name} (${b.service_name || 'Xizmat'})\n`;
+        });
+        await sendBusinessBotMessage(chatId, msg, {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🟢 Keyingi mijozimni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+            ]
+          }
+        });
+      }
+      return;
+    }
+    if (false && auth.staff && (text === '📋 Mening navbatim' || text === 'Mening navbatim')) {
       if (!biz) return;
       const waiting = db.prepare(`
         SELECT q.*, s.name as service_name
@@ -2591,7 +2793,50 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       return;
     }
 
-    if (auth.staff && (text === '📅 Bugungi bronlarim' || text === 'Bugungi bronlarim')) {
+    if (text === '📅 Bugungi bronlarim' || text === 'Bugungi bronlarim') {
+      if (!biz) return;
+      const staffObj = auth.staff || (db.prepare('SELECT * FROM staff WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any);
+      let bList = staffObj ? (db.prepare(`
+        SELECT b.*, s.name as service_name, st.name as staff_name
+        FROM bookings b
+        LEFT JOIN services s ON b.service_id = s.id
+        LEFT JOIN staff st ON b.staff_id = st.id
+        WHERE b.business_id = ?
+          AND b.booking_date = date('now', '+5 hours')
+          AND (b.staff_id = ? OR b.staff_id IS NULL OR b.staff_id = '')
+        ORDER BY b.start_time ASC LIMIT 10
+      `).all(biz.id, staffObj.id) as any[]) : [];
+      if (bList.length === 0) {
+        bList = db.prepare(`
+          SELECT b.*, s.name as service_name, st.name as staff_name
+          FROM bookings b
+          LEFT JOIN services s ON b.service_id = s.id
+          LEFT JOIN staff st ON b.staff_id = st.id
+          WHERE b.business_id = ?
+            AND b.booking_date = date('now', '+5 hours')
+          ORDER BY b.start_time ASC LIMIT 10
+        `).all(biz.id) as any[];
+      }
+
+      if (bList.length === 0) {
+        await sendBusinessBotMessage(chatId, `📅 Bugungi kunga bronlar mavjud emas.`);
+      } else {
+        let msg = `📅 <b>Bugungi bronlar (${bList.length} ta) — ${biz.name}:</b>\n━━━━━━━━━━━━━━━━\n`;
+        bList.forEach((b, idx) => {
+          const stBadge = b.status === 'CONFIRMED' ? '✅' : (b.status === 'IN_PROGRESS' || b.status === 'IN_SERVICE' ? '🟢' : (b.status === 'COMPLETED' ? '🏁' : '⏳'));
+          msg += `${idx + 1}. ${stBadge} <b>#${b.booking_number} (${b.start_time} - ${b.end_time})</b>: ${b.customer_name} — ${b.service_name || 'Xizmat'}\n`;
+        });
+        await sendBusinessBotMessage(chatId, msg, {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: '🟢 Keyingi mijozimni chaqirish', callback_data: `biz_call_next_${biz.id}` }]
+            ]
+          }
+        });
+      }
+      return;
+    }
+    if (false && auth.staff && (text === '📅 Bugungi bronlarim' || text === 'Bugungi bronlarim')) {
       if (!biz) return;
       const bList = db.prepare(`
         SELECT b.*, s.name as service_name
@@ -2616,7 +2861,41 @@ async function handleBusinessBotMessage(msg: any, db: DatabaseSync): Promise<voi
       return;
     }
 
-    if (auth.staff && (text === '📊 Mening hisobotim' || text === 'Mening hisobotim')) {
+    if (text === '📊 Mening hisobotim' || text === 'Mening hisobotim') {
+      if (!biz) return;
+      const staffObj = auth.staff || (db.prepare('SELECT * FROM staff WHERE business_id = ? AND is_active = 1 LIMIT 1').get(biz.id) as any);
+      const completedQueue = db.prepare(`
+        SELECT count(*) as count, COALESCE(sum(s.price_uzs), 0) as total_sum
+        FROM queue_entries q
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.business_id = ?
+          AND q.status = 'COMPLETED'
+          AND (date(q.completed_at, '+5 hours') = date('now', '+5 hours') OR date(q.joined_at, '+5 hours') = date('now', '+5 hours'))
+      `).get(biz.id) as any;
+      const completedBkg = db.prepare(`
+        SELECT count(*) as count, COALESCE(sum(b.total_price_uzs), 0) as total_sum
+        FROM bookings b
+        WHERE b.business_id = ?
+          AND b.status = 'COMPLETED'
+          AND b.booking_date = date('now', '+5 hours')
+          AND ('qe-bkg-' || substr(b.id, 1, 10)) NOT IN (
+            SELECT id FROM queue_entries WHERE business_id = ? AND status = 'COMPLETED'
+          )
+      `).get(biz.id, biz.id) as any;
+      const totalCount = Number(completedQueue?.count || 0) + Number(completedBkg?.count || 0);
+      const totalSum = Number(completedQueue?.total_sum || 0) + Number(completedBkg?.total_sum || 0);
+
+      await sendBusinessBotMessage(
+        chatId,
+        `📊 <b>KUNDALIK SHAXSIY HISOBOT — ${staffObj?.name || auth.user?.name || 'Mutaxassis'}</b>\n━━━━━━━━━━━━━━━━\n` +
+        `🏢 Muassasa: <b>${biz.name}</b>\n` +
+        `👨‍⚕️ Lavozim: <b>${staffObj?.title || 'Mutaxassis'}</b>\n` +
+        `✅ Bugun xizmat ko‘rsatildi: <b>${totalCount} nafar</b> mijoz\n` +
+        `💰 Bugungi xizmatlar summasi: <b>${totalSum.toLocaleString()} so‘m</b>\n━━━━━━━━━━━━━━━━`
+      );
+      return;
+    }
+    if (false && auth.staff && (text === '📊 Mening hisobotim' || text === 'Mening hisobotim')) {
       if (!biz) return;
       const completedToday = db.prepare(`
         SELECT count(*) as count, COALESCE(sum(s.price_uzs), 0) as total_sum
@@ -3599,7 +3878,80 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   // 10. LIVE QUEUE CALL NEXT
+  // Helper to resolve queue entry (including qe-bkg-* booking entries) without false unauthorized errors
+  const ensureQueueEntryForCallback = (rawEntryId: string, bkgTargetStatus?: string): any => {
+    let ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(rawEntryId) as any;
+    if (rawEntryId.startsWith('qe-bkg-')) {
+      const bkgPrefix = rawEntryId.replace('qe-bkg-', '');
+      try {
+        const bkg = db.prepare('SELECT * FROM bookings WHERE id LIKE ? LIMIT 1').get(`${bkgPrefix}%`) as any;
+        if (bkg) {
+          if (bkgTargetStatus) {
+            db.prepare('UPDATE bookings SET status = ? WHERE id = ?').run(bkgTargetStatus, bkg.id);
+          }
+          if (!ent) {
+            db.prepare(`
+              INSERT INTO queue_entries (
+                id, business_id, service_id, staff_id, customer_id, customer_name, customer_phone,
+                queue_number, status, joined_at, called_at, called_source
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
+              ON CONFLICT(id) DO UPDATE SET status = 'SERVING', called_at = CURRENT_TIMESTAMP
+            `).run(
+              rawEntryId,
+              bkg.business_id,
+              bkg.service_id,
+              bkg.staff_id,
+              bkg.customer_id || 'usr-admin',
+              bkg.customer_name,
+              bkg.customer_phone || '',
+              bkg.booking_number
+            );
+            ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(rawEntryId) as any;
+          }
+        }
+      } catch (e) {}
+    }
+    return ent;
+  };
+
+  // 10. LIVE QUEUE CALL NEXT
   if (data.startsWith('biz_call_next_') || data === 'biz_next_customer') {
+    const bizId = data.startsWith('biz_call_next_') ? data.replace('biz_call_next_', '') : (auth.business?.id || '');
+    const isAllowed = auth.role === 'SUPER_ADMIN' || getSuperAdminTelegramIds().includes(String(cbUserId)) || auth.business?.id === bizId || auth.staff?.business_id === bizId || Boolean(db.prepare('SELECT 1 FROM staff WHERE business_id = ? AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, cbChatId, cbUserId)) || Boolean(db.prepare('SELECT 1 FROM businesses WHERE id = ? AND (telegram_chat_id = ? OR telegram_user_id = ?) LIMIT 1').get(bizId, cbChatId, cbUserId));
+    if (!bizId || !isAllowed) {
+      await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
+      return;
+    }
+    const res = executeCallNextCustomerInBot(db, bizId, auth.user?.id, cbUserId);
+    if (!res.success || !res.entry) {
+      await sendBusinessBotMessage(cbChatId, `ℹ️ ${res.message || 'Hozircha navbatda kutayotgan mijozlar yo‘q.'}`);
+      return;
+    }
+    const customerChat = checkEntryTelegramChat(db, res.entry);
+    const hasCustPhone = res.entry.customer_phone && res.entry.customer_phone.replace(/[^0-9]/g, '').length >= 7;
+    const tgStatusNotice = customerChat
+      ? '📢 Mijozga Telegram orqali xabar jo‘natildi.'
+      : (hasCustPhone
+          ? `📞 Mijoz Telegramga ulanmagan: ${res.entry.customer_phone}`
+          : 'ℹ️ Mijozning Telegram manzili mavjud emas.');
+    await sendBusinessBotMessage(
+      cbChatId,
+      `📢 <b>MIJOZ CHAQIRILDI: #${res.entry.queue_number} — ${res.entry.customer_name}</b>\n` +
+      `🩺 Xizmat: <b>${res.entry.service_name || 'Standart xizmat'}</b>\n` +
+      `${tgStatusNotice}`,
+      {
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${res.entry.id}` }, { text: '❌ Kelmadi', callback_data: `biz_q_noshow_${res.entry.id}` }],
+            [{ text: '🔄 Qayta chaqirish', callback_data: `biz_recall_${res.entry.id}` }, { text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${res.entry.id}` }],
+            [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${bizId}` }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+  if (false && (data.startsWith('biz_call_next_') || data === 'biz_next_customer')) {
     const bizId = data.startsWith('biz_call_next_') ? data.replace('biz_call_next_', '') : (auth.business?.id || '');
     if (auth.business?.id !== bizId && auth.role !== 'SUPER_ADMIN') {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
@@ -3641,6 +3993,34 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   // 11. SERVE / COMPLETE / NO-SHOW / CANCEL QUEUE ENTRY
   if (data.startsWith('biz_q_serve_') || data.startsWith('tg_accept_')) {
     const entryId = data.replace('biz_q_serve_', '').replace('tg_accept_', '');
+    const ent = ensureQueueEntryForCallback(entryId, 'IN_PROGRESS');
+    if (!ent) {
+      await sendBusinessBotMessage(cbChatId, 'ℹ️ Ushbu navbat topilmadi yoki allaqachon yakunlangan.');
+      return;
+    }
+    db.prepare("UPDATE queue_entries SET status = 'SERVING' WHERE id = ?").run(entryId);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+    try {
+      botHooks.broadcastQueueUpdate?.(ent.business_id, {
+        type: 'QUEUE_STATUS_UPDATED',
+        entryId,
+        status: 'SERVING',
+        timestamp: Date.now()
+      });
+      botHooks.notifyQueueServing?.(entryId);
+    } catch (e) {}
+    await sendBusinessBotMessage(cbChatId, `🟢 <b>Xizmat ko‘rsatilmoqda: #${ent.queue_number} (${ent.customer_name})</b>`, {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
+        ]
+      }
+    });
+    return;
+  }
+  if (false && (data.startsWith('biz_q_serve_') || data.startsWith('tg_accept_'))) {
+    const entryId = data.replace('biz_q_serve_', '').replace('tg_accept_', '');
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
       await sendBusinessBotMessage(cbChatId, t(lang, 'unauthorized'));
@@ -3671,6 +4051,35 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   if (data.startsWith('biz_recall_') || data.startsWith('tg_recall_')) {
+    const entryId = data.replace('biz_recall_', '').replace('tg_recall_', '');
+    const ent = ensureQueueEntryForCallback(entryId, 'IN_PROGRESS');
+    if (!ent) {
+      await sendBusinessBotMessage(cbChatId, 'ℹ️ Ushbu navbat topilmadi yoki allaqachon yakunlangan.');
+      return;
+    }
+    db.prepare("UPDATE queue_entries SET status = 'CALLED', called_at = CURRENT_TIMESTAMP WHERE id = ?").run(entryId);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+    try {
+      botHooks.broadcastQueueUpdate?.(ent.business_id, {
+        type: 'QUEUE_CALLED',
+        entryId,
+        queue_number: ent.queue_number,
+        timestamp: Date.now()
+      });
+      botHooks.notifyQueueCalled?.(entryId, { skipBusinessAlert: true, isRecall: true });
+    } catch (e) {}
+    await sendBusinessBotMessage(cbChatId, `🔄 <b>Mijoz qayta chaqirildi: #${ent.queue_number} (${ent.customer_name})</b>`, {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '✅ Qabul qilish (Mijoz keldi)', callback_data: `biz_q_serve_${entryId}` }, { text: '❌ Kelmadi (O‘tkazib yuborish)', callback_data: `biz_q_noshow_${entryId}` }],
+          [{ text: '🏁 Xizmatni yakunlash', callback_data: `biz_q_complete_${entryId}` }],
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
+        ]
+      }
+    });
+    return;
+  }
+  if (false && (data.startsWith('biz_recall_') || data.startsWith('tg_recall_'))) {
     const entryId = data.replace('biz_recall_', '').replace('tg_recall_', '');
     const ent = db.prepare('SELECT * FROM queue_entries WHERE id = ?').get(entryId) as any;
     if (!ent || (auth.business?.id !== ent.business_id && auth.role !== 'SUPER_ADMIN')) {
@@ -3704,6 +4113,24 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
 
   if (data.startsWith('biz_q_complete_') || data.startsWith('tg_complete_')) {
     const entryId = data.replace('biz_q_complete_', '').replace('tg_complete_', '');
+    const ent = ensureQueueEntryForCallback(entryId, 'COMPLETED');
+    if (!ent) {
+      await sendBusinessBotMessage(cbChatId, '✅ <b>Xizmat muvaffaqiyatli yakunlandi.</b>');
+      return;
+    }
+    const res = executeMarkCustomerServedInBot(db, ent.business_id, entryId, auth.user?.id, cbUserId);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+    await sendBusinessBotMessage(cbChatId, `✅ <b>Xizmat muvaffaqiyatli yakunlandi: #${ent.queue_number} (${ent.customer_name})</b>`, {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
+        ]
+      }
+    });
+    return;
+  }
+  if (false && (data.startsWith('biz_q_complete_') || data.startsWith('tg_complete_'))) {
+    const entryId = data.replace('biz_q_complete_', '').replace('tg_complete_', '');
     if (entryId.startsWith('qe-bkg-')) {
       const bkgPrefix = entryId.replace('qe-bkg-', '');
       try {
@@ -3728,6 +4155,24 @@ async function handleBusinessBotCallback(cb: any, db: DatabaseSync): Promise<voi
   }
 
   if (data.startsWith('biz_q_noshow_') || data.startsWith('biz_q_cancel_') || data.startsWith('tg_noshow_') || data.startsWith('tg_cancel_')) {
+    const entryId = data.replace('biz_q_noshow_', '').replace('biz_q_cancel_', '').replace('tg_noshow_', '').replace('tg_cancel_', '');
+    const ent = ensureQueueEntryForCallback(entryId, 'CANCELLED');
+    if (!ent) {
+      await sendBusinessBotMessage(cbChatId, '❌ <b>Navbat bekor qilindi / o‘tkazib yuborildi.</b>');
+      return;
+    }
+    const res = executeCancelQueueEntryInBot(db, ent.business_id, entryId, 'Muassasa tomonidan bekor qilindi', auth.user?.id, cbUserId);
+    try { scheduleCloudDatabaseBackup(db); } catch (e) {}
+    await sendBusinessBotMessage(cbChatId, `❌ <b>Navbat bekor qilindi / o‘tkazib yuborildi: #${ent.queue_number} (${ent.customer_name})</b>`, {
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '🟢 Keyingi mijozni chaqirish', callback_data: `biz_call_next_${ent.business_id}` }]
+        ]
+      }
+    });
+    return;
+  }
+  if (false && (data.startsWith('biz_q_noshow_') || data.startsWith('biz_q_cancel_') || data.startsWith('tg_noshow_') || data.startsWith('tg_cancel_'))) {
     const entryId = data.replace('biz_q_noshow_', '').replace('biz_q_cancel_', '').replace('tg_noshow_', '').replace('tg_cancel_', '');
     if (entryId.startsWith('qe-bkg-')) {
       const bkgPrefix = entryId.replace('qe-bkg-', '');

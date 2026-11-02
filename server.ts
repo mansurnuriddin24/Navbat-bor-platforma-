@@ -9443,15 +9443,16 @@ async function handleTelegramDirectCallNext(chatId: string, telegramUserId: stri
     const qEntryId = 'qe-bkg-' + nextBooking.id.slice(0, 10);
     db.prepare(`
       INSERT INTO queue_entries (
-        id, business_id, service_id, staff_id, customer_name, customer_phone,
+        id, business_id, service_id, staff_id, customer_id, customer_name, customer_phone,
         queue_number, status, joined_at, called_at, called_source
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SERVING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'BOOKING')
       ON CONFLICT(id) DO UPDATE SET status = 'SERVING', called_at = CURRENT_TIMESTAMP
     `).run(
       qEntryId,
       biz.id,
       nextBooking.service_id,
       nextBooking.staff_id,
+      nextBooking.customer_id || 'usr-admin',
       nextBooking.customer_name,
       nextBooking.customer_phone || '',
       nextBooking.booking_number

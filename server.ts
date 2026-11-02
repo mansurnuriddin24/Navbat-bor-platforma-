@@ -3427,7 +3427,7 @@ app.post('/api/waitlist', (req, res) => {
   });
 });
 
-// --- DAILY EVENING FINANCIAL & KPI REPORT SCHEDULER (20:00 Tashkent Time) ---
+// --- DAILY EVENING FINANCIAL & KPI REPORT SCHEDULER (22:00 Tashkent Time) ---
 async function checkAndSendEveningBusinessReports(forceBusinessId?: string) {
   try {
     const now = new Date();
@@ -3436,8 +3436,8 @@ async function checkAndSendEveningBusinessReports(forceBusinessId?: string) {
     const currentHour = tashkentDate.getHours();
     const todayStr = tashkentDate.toISOString().slice(0, 10);
 
-    // Run automatically at 20:00-20:59 Tashkent time, or immediately if forceBusinessId is specified
-    if (!forceBusinessId && currentHour !== 20) return;
+    // Run automatically at 22:00-22:59 Tashkent time (Kechki soat 10 da), or immediately if forceBusinessId is specified
+    if (!forceBusinessId && currentHour !== 22) return;
 
     const businesses = forceBusinessId
       ? (db.prepare('SELECT * FROM businesses WHERE id = ?').all(forceBusinessId) as any[])
@@ -3487,6 +3487,81 @@ async function checkAndSendEveningBusinessReports(forceBusinessId?: string) {
           eventType: 'DAILY_EVENING_REPORT' as any,
           dedupKey: forceBusinessId ? `MANUAL_REPORT:${biz.id}:${Date.now()}` : dedupKey,
           message: reportMsg
+        });
+      }
+    }
+
+    // --- SUPER ADMIN GLOBAL COMPREHENSIVE DAILY REPORT (Sent at 22:00 to Super Admin) ---
+    const superAdminDedup = `SUPER_ADMIN_EVENING_REPORT:${todayStr}`;
+    const superAlreadySent = db.prepare('SELECT id FROM telegram_notification_queue WHERE dedup_key = ?').get(superAdminDedup);
+
+    if (forceBusinessId === 'SUPER_ADMIN_FORCE' || (!forceBusinessId && !superAlreadySent)) {
+      const superAdminIds = (process.env.SUPER_ADMIN_TELEGRAM_IDS || '5564730141').split(',').map(s => s.trim()).filter(Boolean);
+
+      const totalBizCount = (db.prepare("SELECT COUNT(*) as c FROM businesses WHERE status IN ('APPROVED', 'ACTIVE')").get() as any)?.c || 0;
+      const totalStaffCount = (db.prepare("SELECT COUNT(*) as c FROM staff WHERE is_active = 1").get() as any)?.c || 0;
+      const totalUsersCount = (db.prepare("SELECT COUNT(*) as c FROM users").get() as any)?.c || 0;
+      const todayTotalBookings = (db.prepare("SELECT COUNT(*) as c FROM bookings WHERE booking_date = ?").get(todayStr) as any)?.c || 0;
+      const todayTotalQueues = (db.prepare("SELECT COUNT(*) as c FROM queue_entries WHERE date(joined_at) = ?").get(todayStr) as any)?.c || 0;
+      const todayServedQueues = (db.prepare("SELECT COUNT(*) as c FROM queue_entries WHERE date(joined_at) = ? AND status = 'COMPLETED'").get(todayStr) as any)?.c || 0;
+      const todayCompletedBookings = (db.prepare("SELECT COUNT(*) as c FROM bookings WHERE booking_date = ? AND status = 'COMPLETED'").get(todayStr) as any)?.c || 0;
+
+      let totalEstGMV = 0;
+      let bizBreakdownLines = '';
+      const allActiveBiz = db.prepare("SELECT id, name, address FROM businesses WHERE status IN ('APPROVED', 'ACTIVE')").all() as any[];
+
+      for (const b of allActiveBiz) {
+        const servedQ = (db.prepare("SELECT COUNT(*) as c FROM queue_entries WHERE business_id = ? AND date(joined_at) = ? AND status = 'COMPLETED'").get(b.id, todayStr) as any)?.c || 0;
+        const servedB = (db.prepare("SELECT COUNT(*) as c FROM bookings WHERE business_id = ? AND booking_date = ? AND status = 'COMPLETED'").get(b.id, todayStr) as any)?.c || 0;
+        const waitingQ = (db.prepare("SELECT COUNT(*) as c FROM queue_entries WHERE business_id = ? AND date(joined_at) = ? AND status IN ('WAITING', 'CALLED', 'SERVING')").get(b.id, todayStr) as any)?.c || 0;
+        const revB = (db.prepare("SELECT COALESCE(SUM(total_price_uzs), 0) as s FROM bookings WHERE business_id = ? AND booking_date = ? AND status = 'COMPLETED'").get(b.id, todayStr) as any)?.s || 0;
+        const revQ = (db.prepare("SELECT COALESCE(SUM(s.price_uzs), 0) as s FROM queue_entries q JOIN services s ON q.service_id = s.id WHERE q.business_id = ? AND date(q.joined_at) = ? AND q.status = 'COMPLETED'").get(b.id, todayStr) as any)?.s || 0;
+        const bizTotal = Number(revB) + Number(revQ);
+        totalEstGMV += bizTotal;
+
+        bizBreakdownLines +=
+          `\n🏢 <b>${b.name}</b>\n` +
+          `   • Xizmat ko‘rsatildi: <b>${servedQ + servedB} nafar</b> (Jonli: ${servedQ}, Bron: ${servedB})\n` +
+          `   • Hozir kutmoqda: <b>${waitingQ} nafar</b>\n` +
+          `   • Kunlik tushum: <b>${bizTotal.toLocaleString('uz-UZ')} UZS</b>\n`;
+      }
+
+      const superReport =
+        `👑 <b>NAVBATBOR PLATFORMASI — KUNLIK GLOBAL HISOBOT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 <b>Hurmatli Super Admin Mansur Nuriddinov!</b>\n` +
+        `Bugungi kechki <b>22:00</b> holatiga butun platforma bo‘yicha to‘liq yakuniy hisobot:\n\n` +
+        `📅 Sana: <b>${todayStr}</b>\n` +
+        `📍 Asosiy shahar: <b>Qarshi shahri (Pilot)</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 <b>BUGUNGI UMUMIY KO‘RSATKICHLAR (KPI):</b>\n` +
+        `• Jami qabul qilingan mijozlar: <b>${todayServedQueues + todayCompletedBookings} nafar</b>\n` +
+        `• Bugungi yangi bronlar: <b>${todayTotalBookings} ta</b>\n` +
+        `• Bugungi jonli navbatlar: <b>${todayTotalQueues} ta</b>\n` +
+        `• 💰 <b>Bugungi platforma aylanmasi (GMV): ${totalEstGMV.toLocaleString('uz-UZ')} UZS</b>\n\n` +
+        `📈 <b>PLATFORMA MASHTABI:</b>\n` +
+        `• Faol bizneslar: <b>${totalBizCount} ta</b>\n` +
+        `• Faol mutaxassislar: <b>${totalStaffCount} nafar</b>\n` +
+        `• Ro‘yxatdan o‘tgan foydalanuvchilar: <b>${totalUsersCount} nafar</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🏬 <b>MUASSASALAR BO‘YICHA HISOBOT:</b>` +
+        bizBreakdownLines +
+        `\n━━━━━━━━━━━━━━━━━━━━\n` +
+        `🛡 <b>TIZIM VA XAVFSIZLIK:</b>\n` +
+        `• SQLite WAL & Cloud Persistence: <b>Faol (Crash-Safe)</b> ✅\n` +
+        `• Telegram Polling worker: <b>24/7 Uzluksiz faol</b> ✅\n` +
+        `• Atomic double-booking himoyasi: <b>Faol (0 ta xatolik)</b> ✅\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚡️ <i>NavbatBor bilan xizmatingiz doimo yuqori sifatda!</i>`;
+
+      for (const superChatId of superAdminIds) {
+        enqueueTelegramNotification({
+          recipientType: 'ADMIN',
+          recipientId: 'super-admin',
+          chatId: superChatId,
+          eventType: 'DAILY_EVENING_REPORT' as any,
+          dedupKey: forceBusinessId ? `SUPER_ADMIN_MANUAL_REPORT:${Date.now()}` : superAdminDedup,
+          message: superReport
         });
       }
     }

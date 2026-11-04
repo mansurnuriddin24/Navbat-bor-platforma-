@@ -13,6 +13,7 @@ import { BusinessCard } from './components/BusinessCard';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { HeroLiveWidget } from './components/HeroLiveWidget';
 import { useTranslation } from './i18n/LanguageContext';
+import { Analytics } from '@vercel/analytics/react';
 
 // Dynamic code-splitting for secondary dashboards and heavy modals
 const BusinessDetail = React.lazy(() => import('./components/BusinessDetail').then(m => ({ default: m.BusinessDetail })));
@@ -1242,6 +1243,9 @@ export default function App() {
         }}
         onOpenScanQR={() => setScanQRModalOpen(true)}
       />
+
+      {/* Vercel Web Analytics */}
+      <Analytics />
     </div>
   );
 }
